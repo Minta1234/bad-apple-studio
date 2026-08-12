@@ -1,0 +1,5 @@
+node_modules/
+backend/jobs/
+firmware/.pio/
+firmware/data/
+.DS_Store

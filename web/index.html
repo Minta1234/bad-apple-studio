@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bad Apple Studio — ESP32 OLED</title>
+<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js"></script>
+<style>
+  :root {
+    --bg: #05070a;
+    --panel: #0d1117;
+    --line: #1c2733;
+    --phosphor: #7dffb3;
+    --phosphor-dim: #3a8a63;
+    --ink: #d6f5e3;
+    --ink-dim: #6f8b7c;
+    --err: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'IBM Plex Mono', 'Cascadia Code', ui-monospace, monospace;
+    min-height: 100vh;
+    padding: 24px 16px 64px;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; }
+
+  header { margin-bottom: 32px; }
+  .eyebrow {
+    color: var(--phosphor-dim);
+    letter-spacing: 0.18em;
+    font-size: 12px;
+    text-transform: uppercase;
+  }
+  h1 {
+    margin: 6px 0 0;
+    font-size: 28px;
+    color: var(--phosphor);
+    text-shadow: 0 0 12px rgba(125,255,179,0.35);
+    font-weight: 600;
+  }
+  p.sub { color: var(--ink-dim); margin: 8px 0 0; line-height: 1.6; font-size: 14px; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  .panel h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--ink-dim);
+    margin: 0 0 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .panel h2::before { content: "▸"; color: var(--phosphor-dim); }
+
+  label { display: block; font-size: 13px; color: var(--ink-dim); margin: 14px 0 6px; }
+  label:first-of-type { margin-top: 0; }
+
+  input[type=file], select, input[type=number] {
+    width: 100%;
+    background: #0a0f14;
+    border: 1px solid var(--line);
+    color: var(--ink);
+    padding: 10px 12px;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 14px;
+  }
+  input:focus, select:focus {
+    outline: 2px solid var(--phosphor-dim);
+    outline-offset: 1px;
+  }
+
+  .row { display: flex; gap: 12px; }
+  .row > div { flex: 1; }
+
+  .checkline { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+  .checkline input { width: auto; }
+  .checkline label { margin: 0; }
+
+  button.primary {
+    margin-top: 20px;
+    width: 100%;
+    background: var(--phosphor);
+    color: #04140b;
+    border: none;
+    padding: 13px;
+    font-weight: 700;
+    font-family: inherit;
+    font-size: 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    letter-spacing: 0.03em;
+  }
+  button.primary:disabled { background: var(--phosphor-dim); cursor: not-allowed; }
+  button.primary:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+  #status { margin-top: 16px; font-size: 13px; color: var(--ink-dim); min-height: 20px; }
+  #status.err { color: var(--err); }
+  #status .dot {
+    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--phosphor); margin-right: 8px; animation: pulse 1.2s infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
+
+  #flashPanel { display: none; }
+  esp-web-install-button::part(activate-button) {
+    background: var(--phosphor);
+    color: #04140b;
+    border: none;
+    padding: 13px 24px;
+    font-weight: 700;
+    border-radius: 4px;
+    font-family: inherit;
+  }
+
+  footer { color: var(--ink-dim); font-size: 12px; margin-top: 32px; line-height: 1.7; }
+  footer a { color: var(--phosphor-dim); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">local video → esp32 → oled</div>
+    <h1>Bad Apple Studio</h1>
+    <p class="sub">อัปโหลดวิดีโอ เลือกจอ แล้วแฟลชผ่าน USB ได้ทันทีจากเบราว์เซอร์นี้ — ไม่มีอะไรออกจากเครื่อง</p>
+  </header>
+
+  <div class="panel">
+    <h2>ตั้งค่าวิดีโอ</h2>
+    <form id="convertForm">
+      <label for="video">ไฟล์วิดีโอ</label>
+      <input type="file" id="video" name="video" accept="video/*" required>
+
+      <label for="display">จอ OLED</label>
+      <select id="display" name="display">
+        <option value="0.96">0.96" — SSD1306 (128x64)</option>
+        <option value="1.3">1.3" — SH1106 (128x64)</option>
+      </select>
+
+      <div class="row">
+        <div>
+          <label for="fps">เฟรมต่อวินาที</label>
+          <input type="number" id="fps" name="fps" value="12" min="1" max="30">
+        </div>
+        <div>
+          <label for="threshold">Threshold (0–255)</label>
+          <input type="number" id="threshold" name="threshold" value="128" min="0" max="255">
+        </div>
+      </div>
+
+      <div class="checkline">
+        <input type="checkbox" id="invert" name="invert">
+        <label for="invert">กลับสี (invert)</label>
+      </div>
+
+      <button type="submit" class="primary" id="submitBtn">แปลงวิดีโอ + compile firmware</button>
+    </form>
+
+    <div id="status"></div>
+  </div>
+
+  <div class="panel" id="flashPanel">
+    <h2>แฟลชขึ้น ESP32</h2>
+    <p class="sub" style="margin-bottom:14px">เสียบ ESP32 ผ่าน USB แล้วกดปุ่มด้านล่าง (ต้องใช้ Chrome/Edge)</p>
+    <esp-web-install-button id="installBtn"></esp-web-install-button>
+  </div>
+
+  <footer>
+    รันบน <code>localhost</code> เท่านั้น — Web Serial ต้องการ secure context<br>
+    ต่อจอ: ESP32 GPIO21→SDA, GPIO22→SCL, 3V3→VCC, GND→GND
+  </footer>
+</div>
+
+<script>
+const form = document.getElementById('convertForm');
+const statusEl = document.getElementById('status');
+const submitBtn = document.getElementById('submitBtn');
+const flashPanel = document.getElementById('flashPanel');
+const installBtn = document.getElementById('installBtn');
+
+const STAGE_LABEL = {
+  queued: 'อยู่ในคิว...',
+  extracting: 'กำลังแตกเฟรมจากวิดีโอ...',
+  packing: 'กำลังเข้ารหัสเฟรม...',
+  building: 'กำลัง compile firmware...',
+  done: 'เสร็จแล้ว พร้อมแฟลช',
+  error: 'เกิดข้อผิดพลาด',
+};
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  submitBtn.disabled = true;
+  flashPanel.style.display = 'none';
+  statusEl.className = '';
+  setStatus('กำลังอัปโหลด...');
+
+  try {
+    const fd = new FormData(form);
+    const res = await fetch('/api/jobs/convert', { method: 'POST', body: fd });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || 'อัปโหลดล้มเหลว');
+
+    await pollJob(body.jobId);
+  } catch (err) {
+    statusEl.className = 'err';
+    setStatus(err.message);
+    submitBtn.disabled = false;
+  }
+});
+
+async function pollJob(jobId) {
+  while (true) {
+    const res = await fetch(`/api/jobs/${jobId}`);
+    const job = await res.json();
+
+    if (job.status === 'error') {
+      statusEl.className = 'err';
+      setStatus(job.error || 'เกิดข้อผิดพลาดระหว่างประมวลผล');
+      submitBtn.disabled = false;
+      return;
+    }
+
+    setStatus(job.progress || STAGE_LABEL[job.status] || job.status);
+
+    if (job.status === 'done') {
+      submitBtn.disabled = false;
+      installBtn.manifest = `/api/jobs/${jobId}/manifest.json`;
+      flashPanel.style.display = 'block';
+      return;
+    }
+
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+}
+
+function setStatus(text) {
+  statusEl.innerHTML = `<span class="dot"></span>${text}`;
+}
+</script>
+</body>
+</html>
