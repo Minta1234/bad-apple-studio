@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Firmware Editor — Bad Apple Studio</title>
+<style>
+  :root {
+    --bg:          #0d1117;
+    --sidebar:     #090d12;
+    --topbar:      #080b10;
+    --line:        #1c2733;
+    --phosphor:    #7dffb3;
+    --phosphor-dim:#3a8a63;
+    --ink:         #d6f5e3;
+    --ink-dim:     #6f8b7c;
+    --err:         #ff6b6b;
+    --warn:        #ffc36b;
+    --ok:          #7dffb3;
+    --accent:      #5b9cf6;
+    --tab-active:  #0d1117;
+    --tab-bg:      #06090d;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  }
+
+  /* ── Top bar ── */
+  #topbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--topbar);
+    border-bottom: 1px solid var(--line);
+    padding: 0 16px;
+    height: 48px;
+    flex-shrink: 0;
+    z-index: 10;
+  }
+  #topbar .logo {
+    font-size: 13px;
+    color: var(--phosphor);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    text-decoration: none;
+  }
+  #topbar .logo span { color: var(--phosphor-dim); font-weight: 400; }
+  #topbar .sep { color: var(--line); font-size: 18px; }
+
+  /* env selector */
+  #envSelect {
+    background: #0a0f14;
+    border: 1px solid var(--line);
+    color: var(--ink);
+    padding: 5px 10px;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  /* buttons */
+  .btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border: none;
+    padding: 7px 14px;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    letter-spacing: 0.03em;
+    transition: opacity .15s;
+    white-space: nowrap;
+  }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn-save    { background: var(--accent);   color: #fff; }
+  .btn-compile { background: var(--phosphor); color: #04140b; }
+  .btn-home    { background: transparent; border: 1px solid var(--line); color: var(--ink-dim); }
+
+  #saveStatus {
+    font-size: 11px;
+    color: var(--ink-dim);
+    margin-left: 4px;
+    min-width: 80px;
+  }
+  #saveStatus.ok  { color: var(--ok); }
+  #saveStatus.err { color: var(--err); }
+
+  /* ── Main layout ── */
+  #main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── Sidebar ── */
+  #sidebar {
+    width: 200px;
+    background: var(--sidebar);
+    border-right: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+  }
+  #sidebar .s-head {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--ink-dim);
+    padding: 12px 14px 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  .file-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 14px;
+    font-size: 13px;
+    cursor: pointer;
+    border-left: 2px solid transparent;
+    transition: background .1s;
+  }
+  .file-item:hover   { background: rgba(125,255,179,.06); }
+  .file-item.active  {
+    background: rgba(125,255,179,.1);
+    border-left-color: var(--phosphor);
+    color: var(--phosphor);
+  }
+  .file-item .fi-icon { font-size: 14px; }
+  .file-item .fi-dirty {
+    margin-left: auto;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--warn);
+    display: none;
+  }
+  .file-item.dirty .fi-dirty { display: block; }
+
+  /* ── Editor pane ── */
+  #editorPane {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  #monacoContainer {
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── Terminal / log panel ── */
+  #terminal {
+    height: 220px;
+    background: #050709;
+    border-top: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    transition: height .2s;
+  }
+  #terminal.collapsed { height: 34px; }
+  #termHead {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 14px;
+    height: 34px;
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+    cursor: pointer;
+    user-select: none;
+  }
+  #termHead .t-title { font-size: 11px; text-transform: uppercase; letter-spacing: .12em; color: var(--ink-dim); }
+  #termHead .t-badge {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-weight: 700;
+    display: none;
+  }
+  #termHead .t-badge.ok   { background: rgba(125,255,179,.15); color: var(--ok);   display: inline; }
+  #termHead .t-badge.err  { background: rgba(255,107,107,.15); color: var(--err);  display: inline; }
+  #termHead .t-badge.busy { background: rgba(91,156,246,.15);  color: var(--accent); display: inline; }
+  #termHead .t-toggle { margin-left: auto; font-size: 14px; color: var(--ink-dim); }
+  #termBody {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px 14px;
+    font-size: 12px;
+    line-height: 1.6;
+    font-family: inherit;
+  }
+  #terminal.collapsed #termBody { display: none; }
+  .log-line { white-space: pre-wrap; word-break: break-all; }
+  .log-line.ok   { color: var(--phosphor); }
+  .log-line.err  { color: var(--err); }
+  .log-line.warn { color: var(--warn); }
+  .log-line.sys  { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<!-- ── Top bar ── -->
+<div id="topbar">
+  <a href="/" class="logo">Bad Apple Studio <span>/ Firmware Editor</span></a>
+  <div class="sep">|</div>
+  <select id="envSelect" title="PlatformIO environment">
+    <option value="esp32-oled096">env: esp32-oled096 (SSD1306)</option>
+    <option value="esp32-oled130">env: esp32-oled130 (SH1106)</option>
+    <option value="esp32-ili9341">env: esp32-ili9341 (ESP32-2432S028)</option>
+  </select>
+  <button class="btn btn-save" id="saveBtn">💾 Save</button>
+  <span id="saveStatus"></span>
+  <button class="btn btn-compile" id="compileBtn">▶ Compile</button>
+  <button class="btn btn-home" onclick="location.href='/'">← Back</button>
+</div>
+
+<!-- ── Main ── -->
+<div id="main">
+
+  <!-- Sidebar -->
+  <div id="sidebar">
+    <div class="s-head">📁 Firmware Files</div>
+    <div id="fileList"></div>
+  </div>
+
+  <!-- Editor + Terminal -->
+  <div id="editorPane">
+    <div id="monacoContainer"></div>
+
+    <div id="terminal">
+      <div id="termHead">
+        <span class="t-title">Build Output</span>
+        <span id="termBadge" class="t-badge"></span>
+        <span class="t-toggle" id="termToggle">▼</span>
+      </div>
+      <div id="termBody"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Monaco Editor from CDN -->
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.47.0/min/vs/loader.js"></script>
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+let editor       = null;
+let currentFileId = null;
+const models     = {}; // id → { model, lang, dirty }
+const filesMeta  = []; // [{id, label, lang}]
+
+// ── Monaco init ─────────────────────────────────────────────────────────────
+require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.47.0/min/vs' } });
+require(['vs/editor/editor.main'], () => {
+  // Define a dark theme matching the app's phosphor palette
+  monaco.editor.defineTheme('badapple', {
+    base: 'vs-dark',
+    inherit: true,
+    rules: [
+      { token: '',               foreground: 'd6f5e3', background: '0d1117' },
+      { token: 'comment',        foreground: '4a6a58', fontStyle: 'italic' },
+      { token: 'keyword',        foreground: '7dffb3', fontStyle: 'bold' },
+      { token: 'string',         foreground: 'ffc36b' },
+      { token: 'number',         foreground: '5b9cf6' },
+      { token: 'type',           foreground: 'c9a7ff' },
+      { token: 'delimiter',      foreground: '6f8b7c' },
+      { token: 'identifier',     foreground: 'd6f5e3' },
+    ],
+    colors: {
+      'editor.background':           '#0d1117',
+      'editor.foreground':           '#d6f5e3',
+      'editorLineNumber.foreground': '#3a5a48',
+      'editorCursor.foreground':     '#7dffb3',
+      'editor.selectionBackground':  '#1e4032',
+      'editor.lineHighlightBackground': '#0f1a13',
+      'editorBracketMatch.background': '#1e4032',
+      'editorBracketMatch.border':   '#7dffb3',
+      'scrollbarSlider.background':  '#1c2733',
+    },
+  });
+
+  editor = monaco.editor.create(document.getElementById('monacoContainer'), {
+    theme:            'badapple',
+    fontSize:         14,
+    fontFamily:       "'IBM Plex Mono', 'Cascadia Code', 'Fira Code', ui-monospace, monospace",
+    fontLigatures:    true,
+    lineNumbers:      'on',
+    minimap:          { enabled: true },
+    scrollBeyondLastLine: false,
+    automaticLayout:  true,
+    tabSize:          2,
+    insertSpaces:     true,
+    wordWrap:         'off',
+    renderWhitespace: 'selection',
+    bracketPairColorization: { enabled: true },
+  });
+
+  // Mark model dirty on edit
+  editor.onDidChangeModelContent(() => {
+    if (currentFileId && models[currentFileId]) {
+      setDirty(currentFileId, true);
+    }
+  });
+
+  loadFileList();
+});
+
+// ── File list ────────────────────────────────────────────────────────────────
+async function loadFileList() {
+  const res  = await fetch('/api/firmware/files');
+  const list = await res.json();
+  filesMeta.push(...list);
+
+  const container = document.getElementById('fileList');
+  for (const f of list) {
+    const el = document.createElement('div');
+    el.className  = 'file-item';
+    el.dataset.id = f.id;
+    el.innerHTML  = `
+      <span class="fi-icon">${langIcon(f.lang)}</span>
+      <span>${f.label}</span>
+      <span class="fi-dirty"></span>`;
+    el.addEventListener('click', () => openFile(f.id));
+    container.appendChild(el);
+  }
+
+  // Auto-open first file
+  if (list.length) openFile(list[0].id);
+}
+
+async function openFile(id) {
+  // Save current file before switching
+  if (currentFileId && models[currentFileId]?.dirty) {
+    await saveFile(currentFileId, { silent: true });
+  }
+
+  // Fetch content if not yet loaded
+  if (!models[id]) {
+    const meta = filesMeta.find((f) => f.id === id);
+    const res  = await fetch(`/api/firmware/files/${id}`);
+    const text = await res.text();
+    const lang = monacoLang(meta?.lang || 'text');
+    const model = monaco.editor.createModel(text, lang);
+    models[id] = { model, lang, dirty: false };
+  }
+
+  editor.setModel(models[id].model);
+  currentFileId = id;
+
+  // Update sidebar highlight
+  document.querySelectorAll('.file-item').forEach((el) => {
+    el.classList.toggle('active', el.dataset.id === id);
+  });
+}
+
+// ── Save ─────────────────────────────────────────────────────────────────────
+document.getElementById('saveBtn').addEventListener('click', () => saveFile(currentFileId));
+
+async function saveFile(id, { silent = false } = {}) {
+  if (!id || !models[id]) return;
+  const content = models[id].model.getValue();
+
+  if (!silent) setSaveStatus('saving…', '');
+
+  const res = await fetch(`/api/firmware/files/${id}`, {
+    method:  'PUT',
+    headers: { 'Content-Type': 'text/plain' },
+    body:    content,
+  });
+
+  if (res.ok) {
+    setDirty(id, false);
+    if (!silent) setSaveStatus('✓ saved', 'ok');
+  } else {
+    const j = await res.json().catch(() => ({}));
+    if (!silent) setSaveStatus('✗ ' + (j.error || 'error'), 'err');
+  }
+}
+
+// Ctrl+S shortcut
+window.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    e.preventDefault();
+    saveFile(currentFileId);
+  }
+});
+
+function setSaveStatus(msg, cls) {
+  const el = document.getElementById('saveStatus');
+  el.textContent  = msg;
+  el.className    = cls;
+  if (cls === 'ok') setTimeout(() => { el.textContent = ''; el.className = ''; }, 2500);
+}
+
+function setDirty(id, dirty) {
+  if (!models[id]) return;
+  models[id].dirty = dirty;
+  const el = document.querySelector(`.file-item[data-id="${id}"]`);
+  el?.classList.toggle('dirty', dirty);
+}
+
+// ── Compile ───────────────────────────────────────────────────────────────────
+const compileBtn  = document.getElementById('compileBtn');
+const termBadge   = document.getElementById('termBadge');
+const termBody    = document.getElementById('termBody');
+const terminal    = document.getElementById('terminal');
+
+compileBtn.addEventListener('click', async () => {
+  // Save all dirty files first
+  for (const id of Object.keys(models)) {
+    if (models[id].dirty) await saveFile(id, { silent: true });
+  }
+
+  compileBtn.disabled = true;
+  clearTerminal();
+  expandTerminal();
+  setBadge('busy', '⬤ building…');
+  appendLog('▶ Compiling firmware…', 'sys');
+
+  const env = document.getElementById('envSelect').value;
+
+  const res = await fetch('/api/firmware/compile', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ env }),
+  });
+
+  const reader  = res.body.getReader();
+  const decoder = new TextDecoder();
+  let   buf     = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+
+    // Parse SSE frames
+    const parts = buf.split('\n\n');
+    buf = parts.pop(); // last partial frame stays in buffer
+
+    for (const block of parts) {
+      const eventMatch = block.match(/^event: (\w+)/m);
+      const dataMatch  = block.match(/^data: (.+)/m);
+      if (!dataMatch) continue;
+
+      let payload;
+      try { payload = JSON.parse(dataMatch[1]); } catch { continue; }
+
+      const eventType = eventMatch?.[1] || 'log';
+
+      if (eventType === 'start') {
+        appendLog(`$ pio run -e ${payload.env}`, 'sys');
+      } else if (eventType === 'log') {
+        appendLog(payload.line);
+      } else if (eventType === 'done') {
+        if (payload.success) {
+          appendLog('\n✓ Compile OK — firmware ready in .pio/build/', 'ok');
+          setBadge('ok', '✓ OK');
+        } else {
+          appendLog(`\n✗ Compile failed (exit ${payload.code})`, 'err');
+          setBadge('err', '✗ ERROR');
+        }
+        compileBtn.disabled = false;
+      } else if (eventType === 'error') {
+        appendLog('✗ ' + payload.message, 'err');
+        setBadge('err', '✗ ERROR');
+        compileBtn.disabled = false;
+      }
+    }
+  }
+});
+
+// ── Terminal helpers ─────────────────────────────────────────────────────────
+document.getElementById('termHead').addEventListener('click', () => {
+  terminal.classList.toggle('collapsed');
+  document.getElementById('termToggle').textContent =
+    terminal.classList.contains('collapsed') ? '▲' : '▼';
+});
+
+function expandTerminal() {
+  terminal.classList.remove('collapsed');
+  document.getElementById('termToggle').textContent = '▼';
+}
+
+function clearTerminal() {
+  termBody.innerHTML = '';
+  termBadge.className = 't-badge';
+  termBadge.textContent = '';
+}
+
+function appendLog(line, cls = '') {
+  const el = document.createElement('div');
+  el.className = 'log-line' + (cls ? ' ' + cls : '');
+  // Colorize common patterns even without explicit class
+  if (!cls) {
+    if (/error:/i.test(line))   el.classList.add('err');
+    else if (/warning:/i.test(line)) el.classList.add('warn');
+    else if (/\[SUCCESS\]|Linking|Compiling/.test(line)) el.classList.add('ok');
+  }
+  el.textContent = line;
+  termBody.appendChild(el);
+  termBody.scrollTop = termBody.scrollHeight;
+}
+
+function setBadge(cls, text) {
+  termBadge.className = `t-badge ${cls}`;
+  termBadge.textContent = text;
+}
+
+// ── Utility ──────────────────────────────────────────────────────────────────
+function langIcon(lang) {
+  return { cpp: '⚙', ini: '⚙', text: '📄', csv: '📊' }[lang] || '📄';
+}
+function monacoLang(lang) {
+  return { cpp: 'cpp', ini: 'ini', text: 'plaintext', csv: 'plaintext' }[lang] || 'plaintext';
+}
+</script>
+</body>
+</html>

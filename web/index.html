@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="th">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -132,24 +132,25 @@
   <header>
     <div class="eyebrow">local video → esp32 → oled</div>
     <h1>Bad Apple Studio</h1>
-    <p class="sub">อัปโหลดวิดีโอ เลือกจอ แล้วแฟลชผ่าน USB ได้ทันทีจากเบราว์เซอร์นี้ — ไม่มีอะไรออกจากเครื่อง</p>
+    <p class="sub">Upload a video, pick a display, and flash directly over USB from this browser — nothing leaves your machine.</p>
   </header>
 
   <div class="panel">
-    <h2>ตั้งค่าวิดีโอ</h2>
+    <h2>Video Settings</h2>
     <form id="convertForm">
-      <label for="video">ไฟล์วิดีโอ</label>
-      <input type="file" id="video" name="video" accept="video/*" required>
+      <label for="videoFile">Select a Video or Image (JPG, PNG, GIF)</label>
+      <input type="file" id="videoFile" name="video" accept="video/*,image/*" required>
 
-      <label for="display">จอ OLED</label>
+      <label for="display">Display</label>
       <select id="display" name="display">
         <option value="0.96">0.96" — SSD1306 (128x64)</option>
         <option value="1.3">1.3" — SH1106 (128x64)</option>
+        <option value="2432s028">2.8" — ILI9341 (ESP32-2432S028)</option>
       </select>
 
       <div class="row">
         <div>
-          <label for="fps">เฟรมต่อวินาที</label>
+          <label for="fps">Frames per second</label>
           <input type="number" id="fps" name="fps" value="12" min="1" max="30">
         </div>
         <div>
@@ -160,24 +161,42 @@
 
       <div class="checkline">
         <input type="checkbox" id="invert" name="invert">
-        <label for="invert">กลับสี (invert)</label>
+        <label for="invert">Invert colors</label>
       </div>
 
-      <button type="submit" class="primary" id="submitBtn">แปลงวิดีโอ + compile firmware</button>
+      <div class="checkline" id="colorModeWrap" style="display: none;">
+        <input type="checkbox" id="colorMode" name="colorMode" value="true" checked>
+        <label for="colorMode">Color Mode</label>
+      </div>
+
+      <div class="checkline" id="sdCardWrap" style="display: none;">
+        <input type="checkbox" id="forSdCard" name="forSdCard" value="true" checked>
+        <label for="forSdCard">Full quality for SD Card (320×240, no size limit)</label>
+      </div>
+
+      <button type="submit" class="primary" id="submitBtn">Upload firmware</button>
     </form>
 
     <div id="status"></div>
   </div>
 
   <div class="panel" id="flashPanel">
-    <h2>แฟลชขึ้น ESP32</h2>
-    <p class="sub" style="margin-bottom:14px">เสียบ ESP32 ผ่าน USB แล้วกดปุ่มด้านล่าง (ต้องใช้ Chrome/Edge)</p>
+    <h2>Done!</h2>
+    <p class="sub" style="margin-bottom:14px; font-weight: bold;">Option 1: Flash over USB (image is resized to fit SPIFFS)</p>
     <esp-web-install-button id="installBtn"></esp-web-install-button>
+
+    <div id="sdCardSection" style="margin-top:24px; padding-top:16px; border-top: 1px solid var(--line); display: none;">
+      <p class="sub" style="margin-top:0; margin-bottom:14px; font-weight: bold;">Option 2: Use a MicroSD Card (full quality, no size limit)</p>
+      <p class="sub" style="margin-bottom:14px; font-size: 12px;">1. Flash via USB using the button above once (so the board has SD card support).<br>2. Download the file below and copy it to your SD card (filename must be <code>video.dat</code>).<br>3. Insert the SD card into the ESP32 CYD board and press Reset.</p>
+      <a id="downloadBtn" href="#" class="primary" style="display:inline-block; text-align:center; text-decoration:none;">📥 Download video.dat</a>
+    </div>
   </div>
 
   <footer>
-    รันบน <code>localhost</code> เท่านั้น — Web Serial ต้องการ secure context<br>
-    ต่อจอ: ESP32 GPIO21→SDA, GPIO22→SCL, 3V3→VCC, GND→GND
+    Runs on <code>localhost</code> only — Web Serial requires a secure context.<br>
+    Standard OLED wiring: ESP32 GPIO21→SDA, GPIO22→SCL, 3V3→VCC, GND→GND<br>
+    ESP32-2432S028: flash directly over the board's USB port.<br><br>
+    <a href="/editor.html" style="color:var(--phosphor-dim);font-weight:600">✦ Open Firmware Editor (edit Arduino code / compile)</a>
   </footer>
 </div>
 
@@ -187,14 +206,33 @@ const statusEl = document.getElementById('status');
 const submitBtn = document.getElementById('submitBtn');
 const flashPanel = document.getElementById('flashPanel');
 const installBtn = document.getElementById('installBtn');
+const displaySelect = document.getElementById('display');
+const colorModeWrap = document.getElementById('colorModeWrap');
+
+const sdCardWrap = document.getElementById('sdCardWrap');
+const colorModeCheckbox = document.getElementById('colorMode');
+
+displaySelect.addEventListener('change', () => {
+  if (displaySelect.value === '2432s028') {
+    colorModeWrap.style.display = 'flex';
+    if (colorModeCheckbox.checked) sdCardWrap.style.display = 'flex';
+  } else {
+    colorModeWrap.style.display = 'none';
+    sdCardWrap.style.display = 'none';
+  }
+});
+
+colorModeCheckbox.addEventListener('change', () => {
+  sdCardWrap.style.display = colorModeCheckbox.checked ? 'flex' : 'none';
+});
 
 const STAGE_LABEL = {
-  queued: 'อยู่ในคิว...',
-  extracting: 'กำลังแตกเฟรมจากวิดีโอ...',
-  packing: 'กำลังเข้ารหัสเฟรม...',
-  building: 'กำลัง compile firmware...',
-  done: 'เสร็จแล้ว พร้อมแฟลช',
-  error: 'เกิดข้อผิดพลาด',
+  queued: 'Queued...',
+  extracting: 'Extracting frames from video...',
+  packing: 'Encoding frames...',
+  building: 'Compiling firmware...',
+  done: 'Done — ready to flash',
+  error: 'An error occurred',
 };
 
 form.addEventListener('submit', async (e) => {
@@ -202,13 +240,13 @@ form.addEventListener('submit', async (e) => {
   submitBtn.disabled = true;
   flashPanel.style.display = 'none';
   statusEl.className = '';
-  setStatus('กำลังอัปโหลด...');
+  setStatus('Uploading...');
 
   try {
     const fd = new FormData(form);
     const res = await fetch('/api/jobs/convert', { method: 'POST', body: fd });
     const body = await res.json();
-    if (!res.ok) throw new Error(body.error || 'อัปโหลดล้มเหลว');
+    if (!res.ok) throw new Error(body.error || 'Upload failed');
 
     await pollJob(body.jobId);
   } catch (err) {
@@ -225,7 +263,7 @@ async function pollJob(jobId) {
 
     if (job.status === 'error') {
       statusEl.className = 'err';
-      setStatus(job.error || 'เกิดข้อผิดพลาดระหว่างประมวลผล');
+      setStatus(job.error || 'An error occurred during processing');
       submitBtn.disabled = false;
       return;
     }
@@ -236,6 +274,15 @@ async function pollJob(jobId) {
       submitBtn.disabled = false;
       installBtn.manifest = `/api/jobs/${jobId}/manifest.json`;
       flashPanel.style.display = 'block';
+      
+      const sdCardSection = document.getElementById('sdCardSection');
+      const downloadBtn = document.getElementById('downloadBtn');
+      if (displaySelect.value === '2432s028') {
+        sdCardSection.style.display = 'block';
+        downloadBtn.href = `/api/jobs/${jobId}/files/video.dat`;
+      } else {
+        sdCardSection.style.display = 'none';
+      }
       return;
     }
 

@@ -7,19 +7,27 @@ const { run } = require('./runCommand');
 const FIRMWARE_TEMPLATE = path.resolve(__dirname, '../../../firmware');
 
 const DISPLAY_ENV = {
-  '0.96': 'esp32-oled096',
-  '1.3': 'esp32-oled130',
+  '0.96':      'esp32-oled096',
+  '1.3':       'esp32-oled130',
+  '2432s028':  'esp32-ili9341',  // ESP32-2432S028 "Cheap Yellow Display"
 };
 
-// whitelist ป้องกัน client ส่งค่า display แปลก ๆ เข้าไปกลายเป็น -e argument เอง
+// Resolution per display key — used in convert.js to resize the video correctly
+const DISPLAY_RESOLUTION = {
+  '0.96':      { width: 128, height: 64  },
+  '1.3':       { width: 128, height: 64  },
+  '2432s028':  { width: 320, height: 240 },
+};
+
+// Whitelist to prevent clients from injecting arbitrary values as the -e argument
 function resolveEnv(display) {
   const env = DISPLAY_ENV[display];
-  if (!env) throw new Error(`display ต้องเป็นหนึ่งใน: ${Object.keys(DISPLAY_ENV).join(', ')}`);
+  if (!env) throw new Error(`display must be one of: ${Object.keys(DISPLAY_ENV).join(', ')}`);
   return env;
 }
 
-// คัดลอก template firmware project ไป workspace เฉพาะของ job นี้ (ไม่รวม .pio cache
-// เดิม/โฟลเดอร์ data เดิม เพื่อไม่ให้ job ชนกันตอนรันพร้อมกัน)
+// Copy the firmware template project to a job-specific workspace
+// (excluding .pio cache and old data folder so concurrent jobs don't conflict)
 function prepareWorkspace(jobDir) {
   const workDir = path.join(jobDir, 'fw');
   fs.cpSync(FIRMWARE_TEMPLATE, workDir, {
@@ -30,16 +38,18 @@ function prepareWorkspace(jobDir) {
   return workDir;
 }
 
-async function compileFirmware({ jobDir, display, videoDatPath, onProgress }) {
+async function compileFirmware({ jobDir, display, videoDatPath, forSdCard, onProgress }) {
   const env = resolveEnv(display);
   const workDir = prepareWorkspace(jobDir);
 
-  fs.copyFileSync(videoDatPath, path.join(workDir, 'data', 'video.dat'));
+  if (!forSdCard) {
+    fs.copyFileSync(videoDatPath, path.join(workDir, 'data', 'video.dat'));
+  }
 
-  onProgress?.('กำลัง compile firmware (ครั้งแรกอาจช้าเพราะดาวน์โหลด toolchain)...');
+  onProgress?.('Compiling firmware (first run may be slow due to toolchain download)...');
   await run('pio', ['run', '-e', env], { cwd: workDir });
 
-  onProgress?.('กำลังสร้าง SPIFFS image...');
+  onProgress?.('Building SPIFFS image...');
   await run('pio', ['run', '-t', 'buildfs', '-e', env], { cwd: workDir });
 
   const buildOut = path.join(workDir, '.pio', 'build', env);
@@ -52,11 +62,11 @@ async function compileFirmware({ jobDir, display, videoDatPath, onProgress }) {
 
   for (const [name, p] of Object.entries(files)) {
     if (!fs.existsSync(p)) {
-      throw new Error(`compile เสร็จแต่หาไฟล์ ${name} ไม่เจอที่ ${p} (ตรวจ log ของ pio)`);
+      throw new Error(`Compile succeeded but ${name} not found at ${p} (check pio log)`);
     }
   }
 
   return files;
 }
 
-module.exports = { compileFirmware, DISPLAY_ENV };
+module.exports = { compileFirmware, DISPLAY_ENV, DISPLAY_RESOLUTION };

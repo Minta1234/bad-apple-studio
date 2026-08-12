@@ -3,12 +3,14 @@
 const express = require('express');
 const path = require('path');
 
-const jobsRouter = require('./src/routes/convert');
+const jobsRouter    = require('./src/routes/convert');
+const firmwareRouter = require('./src/routes/firmware');
 
 const app = express();
 
 app.use(express.static(path.join(__dirname, '..', 'web')));
-app.use('/api/jobs', jobsRouter);
+app.use('/api/jobs',     jobsRouter);
+app.use('/api/firmware', firmwareRouter);
 
 // error handler รวม (เช่น multer โยน error เรื่อง fileFilter/ขนาดไฟล์เกิน)
 app.use((err, req, res, next) => {
