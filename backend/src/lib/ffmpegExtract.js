@@ -9,10 +9,12 @@ const { run } = require('./runCommand');
 async function extractFrames(videoPath, outDir, { fps, width, height, isImage, duration = 0 }) {
   fs.mkdirSync(outDir, { recursive: true });
 
+  // Stretch to fill the display exactly — on a tiny OLED (0.96"/1.3") the slight
+  // aspect distortion is imperceptible, but filling the screen looks far better than
+  // leaving large black letterbox bars on a 128x64 panel.
   const filter =
     (isImage ? '' : `fps=${fps},`) +
-    `scale=${width}:${height}:force_original_aspect_ratio=decrease,` +
-    `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=black,` +
+    `scale=${width}:${height},` +
     `format=gray`;
 
   const args = ['-y', '-i', videoPath];

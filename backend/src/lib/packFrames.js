@@ -24,7 +24,12 @@ function parsePGM(buf) {
   const width = parseInt(readToken(), 10);
   const height = parseInt(readToken(), 10);
   const maxval = parseInt(readToken(), 10);
-  pos += 1; // single whitespace byte before binary data per PGM spec
+  
+  if (buf[pos] === 0x0D && buf[pos + 1] === 0x0A) {
+    pos += 2; // Windows CRLF
+  } else {
+    pos += 1; // single whitespace byte (e.g. \n) before binary data per PGM spec
+  }
 
   const data = buf.subarray(pos, pos + width * height);
   return { width, height, maxval, data };

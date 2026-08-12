@@ -1,7 +1,5 @@
 'use strict';
 
-// เก็บ state ของแต่ละ job ใน memory — พอสำหรับ tool รันเครื่องเดียว local
-// ถ้าจะขยายเป็น multi-process/production ค่อยย้ายไป Redis หรือไฟล์ + lock
 
 const jobs = new Map();
 

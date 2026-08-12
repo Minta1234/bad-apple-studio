@@ -137,17 +137,21 @@ async function processJob(jobId, uploadedVideoPath, { display, fps, threshold, i
   const outputDir   = path.join(jobDir, 'output');
   fs.mkdirSync(outputDir, { recursive: true });
 
-  if (isColor) {
-    updateJob(jobId, { status: 'extracting', progress: 'Calculating video duration for auto-scaling...' });
-    let duration = 0;
-    try {
-      const out = execSync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${uploadedVideoPath}"`);
-      duration = parseFloat(out.toString().trim());
-      if (Number.isNaN(duration)) duration = 0;
-    } catch (e) {
-      duration = 0;
-    }
+  // Get duration once — used by both color and 1-bit paths to cap ffmpeg extraction
+  updateJob(jobId, { status: 'extracting', progress: 'Reading video duration...' });
+  let duration = 0;
+  try {
+    const out = execSync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${uploadedVideoPath}"`);
+    duration = parseFloat(out.toString().trim());
+    if (Number.isNaN(duration)) duration = 0;
+  } catch (e) {
+    duration = 0;
+  }
 
+  const ext = path.extname(uploadedVideoPath).toLowerCase();
+  const isImage = ['.jpg', '.jpeg', '.png', '.bmp', '.webp', '.gif'].includes(ext);
+
+  if (isColor) {
     const totalFrames = Math.ceil(duration * fps);
 
     if (forSdCard) {
@@ -183,16 +187,12 @@ async function processJob(jobId, uploadedVideoPath, { display, fps, threshold, i
       }
     }
 
-    const ext = path.extname(uploadedVideoPath).toLowerCase();
-    const isImage = ['.jpg', '.jpeg', '.png', '.bmp', '.webp', '.gif'].includes(ext);
     updateJob(jobId, { status: 'extracting', progress: `Converting video to RGB565 raw (${W}x${H})...` });
     const rawFile = await extractFramesColor(uploadedVideoPath, framesDir, { fps, width: W, height: H, isImage, duration });
 
     updateJob(jobId, { status: 'packing', progress: `Packing color frames into video.dat...` });
     packFramesColor(rawFile, videoDatPath, { width: W, height: H, fps });
   } else {
-    const ext = path.extname(uploadedVideoPath).toLowerCase();
-    const isImage = ['.jpg', '.jpeg', '.png', '.bmp', '.webp', '.gif'].includes(ext);
     updateJob(jobId, { status: 'extracting', progress: 'Extracting frames from video with ffmpeg...' });
     const frames = await extractFrames(uploadedVideoPath, framesDir, { fps, width: W, height: H, isImage, duration });
 

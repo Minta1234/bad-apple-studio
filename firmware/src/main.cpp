@@ -12,6 +12,7 @@
   #include <SPI.h>
   static TFT_eSPI tft;
 
+
 #elif defined(DISPLAY_DRIVER_SSD1306)
   #include <U8g2lib.h>
   #include <Wire.h>
@@ -50,7 +51,7 @@ static uint32_t   lastFrameAt     = 0;
 
 // Frame buffers (static — live in BSS, not stack)
 static uint8_t frameBuf[FRAME_BYTES];            // 1-bit packed, LSB-first
-static uint8_t payload[FRAME_W * FRAME_H];       // worst-case RLE payload
+static uint8_t payload[(FRAME_W * FRAME_H) + 16]; // worst-case RLE payload + safety margin
 
 // ── Varint (LEB128) decoder ───────────────────────────────────────────────────
 static uint32_t readVarint(const uint8_t* data, size_t len, size_t& idx) {

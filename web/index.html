@@ -5,198 +5,219 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bad Apple Studio — ESP32 OLED</title>
 <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js"></script>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
 <style>
   :root {
-    --bg: #05070a;
-    --panel: #0d1117;
-    --line: #1c2733;
-    --phosphor: #7dffb3;
-    --phosphor-dim: #3a8a63;
-    --ink: #d6f5e3;
-    --ink-dim: #6f8b7c;
-    --err: #ff6b6b;
+    --hair:    #F7F7FB;
+    --hair-sh: #D9DCE5;
+    --eye:     #F03C72;
+    --jacket:  #323842;
+    --lining:  #E83D6F;
+    --tie:     #2DBBEB;
+    --halo:    #FFB6C1;
+    --bg-sky:  #A9C9E2;
+
+    /* Light mode tokens */
+    --bg-gradient: linear-gradient(145deg, #eef4fb 0%, #dceef8 40%, #f7edf5 100%);
+    --text-main:   var(--jacket);
+    --text-sub:    #6b7590;
+    --card-bg:     rgba(255,255,255,0.72);
+    --card-border: rgba(45,187,235,0.25);
+    --card-shadow: 0 4px 24px rgba(45,187,235,0.10), 0 1px 4px rgba(50,56,66,0.06);
+    --card-hover-shadow: 0 16px 48px rgba(45,187,235,0.28), 0 2px 8px rgba(50,56,66,0.08);
+    --btn-bg:      var(--jacket);
+    --btn-color:   #fff;
+    --orb1: rgba(45,187,235,0.18);
+    --orb2: rgba(240,60,114,0.12);
+    --orb3: rgba(255,182,193,0.20);
+    --badge-bg: rgba(45,187,235,0.1);
+    --badge-color: var(--tie);
   }
-  * { box-sizing: border-box; }
+  
   body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--ink);
     font-family: 'IBM Plex Mono', 'Cascadia Code', ui-monospace, monospace;
+    background: var(--bg-gradient);
+    background-attachment: fixed;
+    color: var(--text-main);
     min-height: 100vh;
-    padding: 24px 16px 64px;
   }
-  .wrap { max-width: 640px; margin: 0 auto; }
-
-  header { margin-bottom: 32px; }
-  .eyebrow {
-    color: var(--phosphor-dim);
-    letter-spacing: 0.18em;
-    font-size: 12px;
-    text-transform: uppercase;
+  
+  .container { max-width: 680px; position: relative; z-index: 1; }
+  
+  h1 { 
+    color: var(--tie); 
+    font-weight: 700; 
+    letter-spacing: -0.02em;
   }
-  h1 {
-    margin: 6px 0 0;
-    font-size: 28px;
-    color: var(--phosphor);
-    text-shadow: 0 0 12px rgba(125,255,179,0.35);
-    font-weight: 600;
+  
+  .text-sub { color: var(--text-sub) !important; }
+  .text-tie { color: var(--tie) !important; }
+  .text-eye { color: var(--eye) !important; }
+  
+  .glass-card { 
+    background: var(--card-bg); 
+    border: 1px solid var(--card-border);
+    box-shadow: var(--card-shadow);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-radius: 16px;
+    transition: box-shadow 0.3s ease;
   }
-  p.sub { color: var(--ink-dim); margin: 8px 0 0; line-height: 1.6; font-size: 14px; }
-
-  .panel {
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    padding: 20px;
-    margin-bottom: 20px;
+  .glass-card:hover {
+    box-shadow: var(--card-hover-shadow);
   }
-  .panel h2 {
-    font-size: 13px;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: var(--ink-dim);
-    margin: 0 0 16px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
+  
+  .form-control, .form-select {
+    background: rgba(255,255,255,0.6);
+    border: 1px solid rgba(45,187,235,0.3);
+    color: var(--text-main);
   }
-  .panel h2::before { content: "▸"; color: var(--phosphor-dim); }
-
-  label { display: block; font-size: 13px; color: var(--ink-dim); margin: 14px 0 6px; }
-  label:first-of-type { margin-top: 0; }
-
-  input[type=file], select, input[type=number] {
-    width: 100%;
-    background: #0a0f14;
-    border: 1px solid var(--line);
-    color: var(--ink);
-    padding: 10px 12px;
-    border-radius: 4px;
-    font-family: inherit;
-    font-size: 14px;
+  .form-control:focus, .form-select:focus {
+    background: #fff;
+    border-color: var(--tie);
+    box-shadow: 0 0 0 0.25rem rgba(45,187,235,0.25);
   }
-  input:focus, select:focus {
-    outline: 2px solid var(--phosphor-dim);
-    outline-offset: 1px;
-  }
-
-  .row { display: flex; gap: 12px; }
-  .row > div { flex: 1; }
-
-  .checkline { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
-  .checkline input { width: auto; }
-  .checkline label { margin: 0; }
-
-  button.primary {
-    margin-top: 20px;
-    width: 100%;
-    background: var(--phosphor);
-    color: #04140b;
+  
+  .btn-theme {
+    background: var(--btn-bg);
+    color: var(--btn-color);
     border: none;
-    padding: 13px;
-    font-weight: 700;
-    font-family: inherit;
-    font-size: 14px;
-    border-radius: 4px;
-    cursor: pointer;
-    letter-spacing: 0.03em;
+    border-radius: 8px;
+    transition: all 0.2s ease;
   }
-  button.primary:disabled { background: var(--phosphor-dim); cursor: not-allowed; }
-  button.primary:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-
-  #status { margin-top: 16px; font-size: 13px; color: var(--ink-dim); min-height: 20px; }
-  #status.err { color: var(--err); }
-  #status .dot {
-    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
-    background: var(--phosphor); margin-right: 8px; animation: pulse 1.2s infinite;
+  .btn-theme:hover {
+    background: var(--tie);
+    color: #fff;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(45,187,235,0.3);
   }
-  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
-
-  #flashPanel { display: none; }
+  
   esp-web-install-button::part(activate-button) {
-    background: var(--phosphor);
-    color: #04140b;
+    background: var(--eye);
+    color: #fff;
     border: none;
-    padding: 13px 24px;
-    font-weight: 700;
-    border-radius: 4px;
-    font-family: inherit;
+    padding: 0.75rem 1.5rem;
+    font-size: 1rem;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: all 0.2s;
   }
-
-  footer { color: var(--ink-dim); font-size: 12px; margin-top: 32px; line-height: 1.7; }
-  footer a { color: var(--phosphor-dim); }
+  esp-web-install-button::part(activate-button):hover {
+    background: var(--lining);
+    box-shadow: 0 4px 12px rgba(240,60,114,0.3);
+  }
+  
+  .bg-orbs {
+    position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+    overflow: hidden; z-index: 0; pointer-events: none;
+  }
+  .orb { position: absolute; border-radius: 50%; filter: blur(60px); }
+  .orb-1 { top: -10%; left: -10%; width: 50vw; height: 50vw; background: var(--orb1); animation: float 20s ease-in-out infinite alternate; }
+  .orb-2 { bottom: -20%; right: -10%; width: 60vw; height: 60vw; background: var(--orb2); animation: float 25s ease-in-out infinite alternate-reverse; }
+  .orb-3 { top: 40%; left: 60%; width: 40vw; height: 40vw; background: var(--orb3); animation: float 18s ease-in-out infinite alternate; }
+  
+  @keyframes float {
+    0% { transform: translate(0, 0) scale(1); }
+    100% { transform: translate(5%, 10%) scale(1.1); }
+  }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <div class="eyebrow">local video → esp32 → oled</div>
-    <h1>Bad Apple Studio</h1>
-    <p class="sub">Upload a video, pick a display, and flash directly over USB from this browser — nothing leaves your machine.</p>
+<div class="bg-orbs">
+  <div class="orb orb-1"></div>
+  <div class="orb orb-2"></div>
+  <div class="orb orb-3"></div>
+</div>
+
+<div class="container py-5">
+  <header class="mb-4 text-center">
+    <div class="text-uppercase text-sub fw-bold" style="font-size: 0.8rem; letter-spacing: 0.15em;">local video → esp32 → oled</div>
+    <h1 class="display-6 mt-1">Bad Apple Studio</h1>
+    <p class="text-sub mt-2">Upload a video, pick a display, and flash directly over USB from this browser — nothing leaves your machine.</p>
   </header>
 
-  <div class="panel">
-    <h2>Video Settings</h2>
+  <div class="glass-card p-4 mb-4">
+    <h5 class="text-uppercase text-tie fw-bold mb-4" style="font-size: 0.85rem; letter-spacing: 0.1em;">
+      ▸ Video Settings
+    </h5>
+    
     <form id="convertForm">
-      <label for="videoFile">Select a Video or Image (JPG, PNG, GIF)</label>
-      <input type="file" id="videoFile" name="video" accept="video/*,image/*" required>
+      <div class="mb-3">
+        <label for="videoFile" class="form-label text-sub fw-medium">Select a Video or Image (JPG, PNG, GIF)</label>
+        <input class="form-control" type="file" id="videoFile" name="video" accept="video/*,image/*" required>
+      </div>
 
-      <label for="display">Display</label>
-      <select id="display" name="display">
-        <option value="0.96">0.96" — SSD1306 (128x64)</option>
-        <option value="1.3">1.3" — SH1106 (128x64)</option>
-        <option value="2432s028">2.8" — ILI9341 (ESP32-2432S028)</option>
-      </select>
+      <div class="mb-3">
+        <label for="display" class="form-label text-sub fw-medium">Display</label>
+        <select class="form-select" id="display" name="display">
+          <option value="0.96">0.96" — SSD1306 (128x64)</option>
+          <option value="1.3">1.3" — SH1106 (128x64)</option>
+          <option value="2432s028">2.8" — ILI9341 (ESP32-2432S028)</option>
+        </select>
+      </div>
 
-      <div class="row">
-        <div>
-          <label for="fps">Frames per second</label>
-          <input type="number" id="fps" name="fps" value="12" min="1" max="30">
+      <div class="row g-3 mb-3">
+        <div class="col-sm-6">
+          <label for="fps" class="form-label text-sub fw-medium">Frames per second</label>
+          <input type="number" class="form-control" id="fps" name="fps" value="12" min="1" max="30">
         </div>
-        <div>
-          <label for="threshold">Threshold (0–255)</label>
-          <input type="number" id="threshold" name="threshold" value="128" min="0" max="255">
+        <div class="col-sm-6">
+          <label for="threshold" class="form-label text-sub fw-medium">Threshold (0–255)</label>
+          <input type="number" class="form-control" id="threshold" name="threshold" value="128" min="0" max="255">
         </div>
       </div>
 
-      <div class="checkline">
-        <input type="checkbox" id="invert" name="invert">
-        <label for="invert">Invert colors</label>
+      <div class="form-check mb-2">
+        <input class="form-check-input" type="checkbox" id="invert" name="invert">
+        <label class="form-check-label text-sub" for="invert">Invert colors</label>
       </div>
 
-      <div class="checkline" id="colorModeWrap" style="display: none;">
-        <input type="checkbox" id="colorMode" name="colorMode" value="true" checked>
-        <label for="colorMode">Color Mode</label>
+      <div class="form-check mb-2" id="colorModeWrap" style="display: none;">
+        <input class="form-check-input" type="checkbox" id="colorMode" name="colorMode" value="true" checked>
+        <label class="form-check-label text-sub" for="colorMode">Color Mode</label>
       </div>
 
-      <div class="checkline" id="sdCardWrap" style="display: none;">
-        <input type="checkbox" id="forSdCard" name="forSdCard" value="true" checked>
-        <label for="forSdCard">Full quality for SD Card (320×240, no size limit)</label>
+      <div class="mb-4" id="sdCardWrap" style="display: none;">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="forSdCard" name="forSdCard" value="true" checked>
+          <label class="form-check-label text-sub" for="forSdCard">Full quality for SD Card (320×240, no size limit)</label>
+        </div>
+        <div class="alert py-2 px-3 mt-2" style="background: rgba(240,60,114,0.1); border-left: 4px solid var(--eye); font-size: 0.85rem; color: var(--text-main);" id="sdCaution">
+          <strong>Caution:</strong> If checked, the video will <strong>NOT</strong> be flashed to the board. You MUST download the <code>video.dat</code> file at the end and copy it to a physical SD Card manually.
+        </div>
       </div>
 
-      <button type="submit" class="primary" id="submitBtn">Upload firmware</button>
+      <button type="submit" class="btn btn-theme w-100 fw-bold py-2" id="submitBtn">Upload firmware</button>
     </form>
 
-    <div id="status"></div>
+    <div id="status" class="mt-3 text-sub fw-medium" style="min-height: 24px; font-size: 0.9rem;"></div>
   </div>
 
-  <div class="panel" id="flashPanel">
-    <h2>Done!</h2>
-    <p class="sub" style="margin-bottom:14px; font-weight: bold;">Option 1: Flash over USB (image is resized to fit SPIFFS)</p>
+  <div class="glass-card p-4 mb-4" id="flashPanel" style="display: none;">
+    <h5 class="text-uppercase text-tie fw-bold mb-4" style="font-size: 0.85rem; letter-spacing: 0.1em;">
+      ▸ Done!
+    </h5>
+    
+    <p class="fw-bold mb-3 text-main">Option 1: Flash over USB (image is resized to fit SPIFFS)</p>
     <esp-web-install-button id="installBtn"></esp-web-install-button>
 
-    <div id="sdCardSection" style="margin-top:24px; padding-top:16px; border-top: 1px solid var(--line); display: none;">
-      <p class="sub" style="margin-top:0; margin-bottom:14px; font-weight: bold;">Option 2: Use a MicroSD Card (full quality, no size limit)</p>
-      <p class="sub" style="margin-bottom:14px; font-size: 12px;">1. Flash via USB using the button above once (so the board has SD card support).<br>2. Download the file below and copy it to your SD card (filename must be <code>video.dat</code>).<br>3. Insert the SD card into the ESP32 CYD board and press Reset.</p>
-      <a id="downloadBtn" href="#" class="primary" style="display:inline-block; text-align:center; text-decoration:none;">📥 Download video.dat</a>
+    <div id="sdCardSection" class="mt-4 pt-3 border-top border-secondary-subtle" style="display: none;">
+      <p class="fw-bold mb-2 text-main">Option 2: Use a MicroSD Card (full quality, no size limit)</p>
+      <ol class="text-sub small mb-3">
+        <li>Flash via USB using the button above once (so the board has SD card support).</li>
+        <li>Download the file below and copy it to your SD card (filename must be <code>video.dat</code>).</li>
+        <li>Insert the SD card into the ESP32 CYD board and press Reset.</li>
+      </ol>
+      <a id="downloadBtn" href="#" class="btn btn-theme">📥 Download video.dat</a>
     </div>
   </div>
 
-  <footer>
-    Runs on <code>localhost</code> only — Web Serial requires a secure context.<br>
-    Standard OLED wiring: ESP32 GPIO21→SDA, GPIO22→SCL, 3V3→VCC, GND→GND<br>
-    ESP32-2432S028: flash directly over the board's USB port.<br><br>
-    <a href="/editor.html" style="color:var(--phosphor-dim);font-weight:600">✦ Open Firmware Editor (edit Arduino code / compile)</a>
+  <footer class="text-center text-sub small mt-4 pb-5">
+    <p class="mb-1">Runs on <code>localhost</code> only — Web Serial requires a secure context.</p>
+    <p class="mb-1">Standard OLED wiring: ESP32 GPIO21→SDA, GPIO22→SCL, 3V3→VCC, GND→GND</p>
+    <p class="mb-3">ESP32-2432S028: flash directly over the board's USB port.</p>
+    <a href="/editor.html" class="text-decoration-none text-eye fw-bold">✦ Open Firmware Editor (edit Arduino code / compile)</a>
   </footer>
 </div>
 
@@ -211,11 +232,13 @@ const colorModeWrap = document.getElementById('colorModeWrap');
 
 const sdCardWrap = document.getElementById('sdCardWrap');
 const colorModeCheckbox = document.getElementById('colorMode');
+const forSdCardCheckbox = document.getElementById('forSdCard');
+const sdCaution = document.getElementById('sdCaution');
 
 displaySelect.addEventListener('change', () => {
   if (displaySelect.value === '2432s028') {
     colorModeWrap.style.display = 'flex';
-    if (colorModeCheckbox.checked) sdCardWrap.style.display = 'flex';
+    if (colorModeCheckbox.checked) sdCardWrap.style.display = 'block';
   } else {
     colorModeWrap.style.display = 'none';
     sdCardWrap.style.display = 'none';
@@ -223,7 +246,11 @@ displaySelect.addEventListener('change', () => {
 });
 
 colorModeCheckbox.addEventListener('change', () => {
-  sdCardWrap.style.display = colorModeCheckbox.checked ? 'flex' : 'none';
+  sdCardWrap.style.display = colorModeCheckbox.checked ? 'block' : 'none';
+});
+
+forSdCardCheckbox.addEventListener('change', () => {
+  sdCaution.style.display = forSdCardCheckbox.checked ? 'block' : 'none';
 });
 
 const STAGE_LABEL = {
@@ -239,7 +266,7 @@ form.addEventListener('submit', async (e) => {
   e.preventDefault();
   submitBtn.disabled = true;
   flashPanel.style.display = 'none';
-  statusEl.className = '';
+  statusEl.className = 'mt-3 text-sub fw-medium';
   setStatus('Uploading...');
 
   try {
@@ -250,7 +277,7 @@ form.addEventListener('submit', async (e) => {
 
     await pollJob(body.jobId);
   } catch (err) {
-    statusEl.className = 'err';
+    statusEl.className = 'mt-3 text-eye fw-medium';
     setStatus(err.message);
     submitBtn.disabled = false;
   }
@@ -262,7 +289,7 @@ async function pollJob(jobId) {
     const job = await res.json();
 
     if (job.status === 'error') {
-      statusEl.className = 'err';
+      statusEl.className = 'mt-3 text-eye fw-medium';
       setStatus(job.error || 'An error occurred during processing');
       submitBtn.disabled = false;
       return;
@@ -291,7 +318,7 @@ async function pollJob(jobId) {
 }
 
 function setStatus(text) {
-  statusEl.innerHTML = `<span class="dot"></span>${text}`;
+  statusEl.innerHTML = `<div class="spinner-border spinner-border-sm text-tie me-2" role="status"></div>${text}`;
 }
 </script>
 </body>
