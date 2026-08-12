@@ -1,10 +1,8 @@
-# Bad Apple Studio — local video → ESP32 OLED flasher
+# Bad Apple Studio — Local Video to ESP32 OLED Flasher
 
-รันทั้งหมด local: อัปโหลดวิดีโอ → backend แปลง/บีบอัดเป็นข้อมูลเฟรม 1-bit →
-compile firmware ตามจอที่เลือก (0.96" SSD1306 หรือ 1.3" SH1106) →
-สร้าง SPIFFS image → เว็บหน้า flasher (esp-web-tools) แฟลชผ่าน USB ได้เลย
+Run entirely locally: Upload video → Backend converts/compresses into 1-bit frame data → Compile firmware based on chosen display (0.96" SSD1306 or 1.3" SH1106) → Generate LittleFS image → Web flasher interface (esp-web-tools) flashes directly via USB.
 
-## สถาปัตยกรรม
+## Architecture
 
 ```
 video (mp4/...)
@@ -17,63 +15,65 @@ video.dat  (header + RLE frames)
    │  mkspiffs -c <dir> -s 0x160000 littlefs.bin
    ▼
 littlefs.bin  ──┐
-                ├─ manifest.json (dynamic, per job) ──► esp-web-tools ──► ESP32 ผ่าน USB
+                ├─ manifest.json (dynamic, per job) ──► esp-web-tools ──► ESP32 via USB
 firmware.bin  ──┘
-(compiled ต่อ job ด้วย PlatformIO ตาม env ที่เลือก: esp32-oled096 / esp32-oled130)
+(compiled per job using PlatformIO according to chosen env: esp32-oled096 / esp32-oled130)
+
 ```
 
-**เหตุผลที่ compile firmware ใหม่ทุกครั้ง (ทางเลือก B ตามที่ระบุ):** ไม่มีซอร์ส firmware
-เดิม เขียนใหม่ทั้งหมดด้วย PlatformIO + U8g2 (รองรับทั้ง SSD1306/SH1106 ผ่าน compile-time
-class เดียวกัน) แต่ละ display เป็นคนละ `env` ใน `platformio.ini` — backend เรียก
-`pio run -e <env>` ต่อ job แล้ว scrape output binaries จาก `.pio/build/<env>/`
+**Reason for recompiling firmware per job:**
+Written from scratch using PlatformIO + U8g2 (supporting both SSD1306 and SH1106 via the same compile-time class structure). Each display type corresponds to a different `env` in `platformio.ini` — the backend executes `pio run -e <env>` per job and scrapes the output binaries from `.pio/build/<env>/`.
 
-**หมายเหตุ:** จอทั้งสองขนาดที่ระบุ (0.96" กับ 1.3") เป็นความละเอียด **128x64 เท่ากัน**
-ต่างกันแค่ driver chip (SSD1306 vs SH1106) — ดังนั้น pipeline แปลงวิดีโอใช้ค่าคงที่
-128x64 ตัวเดียว ไม่ต้อง parametrize ตาม "ขนาดจอ" จริง ๆ ถ้าใช้จอความละเอียดอื่นในอนาคต
-ค่อยเพิ่ม width/height เป็นพารามิเตอร์
+> **Note:** Both specified display sizes (0.96" and 1.3") share the exact same resolution (**128x64**). They only differ in their driver chips (SSD1306 vs SH1106). Therefore, the video processing pipeline uses a fixed 128x64 constant rather than parametrizing by display size. If displays with different resolutions are added in the future, width and height can be parametrized.
 
-## ติดตั้งก่อนใช้งาน (ครั้งเดียว)
+---
+
+## Prerequisites & Installation (One-Time Setup)
 
 ```bash
-# 1) ffmpeg (แตกเฟรม + resize + grayscale)
-sudo apt install ffmpeg          # หรือ brew install ffmpeg บน macOS
+# 1) ffmpeg (frame extraction + resize + grayscale)
+sudo apt install ffmpeg          # or `brew install ffmpeg` on macOS
 
-# 2) PlatformIO core CLI (compile firmware + มี mkspiffs มาให้ในตัว)
+# 2) PlatformIO Core CLI (compiles firmware + includes filesystem tools)
 pip install platformio --break-system-packages
-pio pkg install -g -p espressif32   # ดึง toolchain ESP32 มาไว้ล่วงหน้า (จะได้ไม่ช้าตอน job แรก)
+pio pkg install -g -p espressif32   # Pre-download ESP32 toolchain (avoids lag on first job)
 
-# 3) backend deps
+# 3) Backend dependencies
 cd backend && npm install
+
 ```
 
-## รัน
+---
+
+## Running the Server
 
 ```bash
 cd backend
 node server.js
-# เปิด http://localhost:3000
+# Open http://localhost:3000 in your browser
+
 ```
 
-หน้าเว็บ (`web/index.html`) เสิร์ฟจาก backend เดียวกัน (ไม่มีปัญหา CORS, ไม่ต้องรัน
-สอง process) — Web Serial ใช้ได้เพราะเป็น `localhost`
+The web interface (`web/index.html`) is served directly by the backend (eliminates CORS issues and runs in a single process). Web Serial works seamlessly because it runs over `localhost`.
 
-## ความปลอดภัย / ข้อควรระวัง (สำคัญกับงาน backend รับไฟล์อัปโหลด)
+---
 
-- จำกัดขนาดไฟล์อัปโหลดและ mime type ที่ multer (`backend/server.js`)
-- job id เป็น UUID สุ่ม ไม่รับ path จาก client ตรง ๆ (กัน path traversal)
-- ลบไฟล์ใน `uploads/` และไฟล์ frame ชั่วคราวหลัง job เสร็จ/error ทุกครั้ง (`finally` block)
-- รันเซิร์ฟเวอร์นี้ผูกกับ `127.0.0.1` เท่านั้น — ถ้าจะเปิดให้เครื่องอื่นในวง LAN เข้าถึง
-  ต้องเพิ่ม auth ก่อน เพราะตอนนี้ไม่มีการยืนยันตัวตนเลย และ endpoint สั่ง compile
-  โค้ดจาก request ได้ (แม้จะจำกัด parameter ก็ตาม ควรมองเป็น attack surface)
+## Security & Production Considerations
 
-## ต่อจอเข้ากับ ESP32 (I2C)
+* **Upload Constraints:** Restrict maximum file upload sizes and MIME types in Multer (`backend/server.js`).
+* **Path Traversal Defense:** Generate random UUIDs for job IDs; never trust direct file paths submitted by client requests.
+* **Resource Cleanup:** Delete uploaded video files and temporary frame files after every job completes or errors out (handled inside a `finally` block).
+* **Local Binding:** Bind the server strictly to `127.0.0.1`. If exposing the application over a LAN, implement authentication first, as endpoints trigger firmware compilation from request parameters (acting as a potential attack surface).
 
-| ESP32 pin | OLED pin |
-|---|---|
-| 3V3 | VCC |
-| GND | GND |
-| GPIO21 | SDA |
-| GPIO22 | SCL |
+---
 
-(ตรงตาม default I2C pin ของ U8g2 hardware I2C บน ESP32 dev board ทั่วไป —
-ถ้าบอร์ดจริงต่อขาอื่น แก้ที่ `firmware/src/main.cpp` บรรทัด `Wire.begin(...)`)
+## OLED to ESP32 Pinout (I2C)
+
+| ESP32 Pin | OLED Pin |
+| --- | --- |
+| **3V3** | VCC |
+| **GND** | GND |
+| **GPIO21** | SDA |
+| **GPIO22** | SCL |
+
+*(Matches default U8g2 hardware I2C pins on standard ESP32 development boards. If your board uses custom pins, update `Wire.begin(...)` in `firmware/src/main.cpp`.)*
