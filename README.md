@@ -77,3 +77,5 @@ The web interface (`web/index.html`) is served directly by the backend (eliminat
 | **GPIO22** | SCL |
 
 *(Matches default U8g2 hardware I2C pins on standard ESP32 development boards. If your board uses custom pins, update `Wire.begin(...)` in `firmware/src/main.cpp`.)*
+
+If use ESP32-2432S028 is not display try to Download video.bat and upload to Sd card(8Gb Fat32) if you not have sd card untick "Full quality for SD Card (320×240, no size limit)"
