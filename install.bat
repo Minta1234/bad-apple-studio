@@ -33,7 +33,7 @@ REM ---------------------------------------------------------
 where node >nul 2>nul
 if errorlevel 1 (
     echo [1/4] Node.js not found - installing...
-    winget install -e --id OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements
+    winget install --id OpenJS.NodeJS.LTS --source winget
     set NEED_RESTART=1
 ) else (
     echo [1/4] Node.js already installed - skipping
@@ -45,7 +45,7 @@ REM ---------------------------------------------------------
 where python >nul 2>nul
 if errorlevel 1 (
     echo [2/4] Python not found - installing...
-    winget install -e --id Python.Python.3.12 --accept-package-agreements --accept-source-agreements
+    winget install --id Python.Python.3.12 --source winget
     set NEED_RESTART=1
 ) else (
     echo [2/4] Python already installed - skipping
@@ -57,7 +57,7 @@ REM ---------------------------------------------------------
 where ffmpeg >nul 2>nul
 if errorlevel 1 (
     echo [3/4] ffmpeg not found - installing...
-    winget install -e --id Gyan.FFmpeg --accept-package-agreements --accept-source-agreements
+    winget install --id Gyan.FFmpeg --source winget
     set NEED_RESTART=1
 ) else (
     echo [3/4] ffmpeg already installed - skipping
