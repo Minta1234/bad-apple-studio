@@ -142,8 +142,17 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = 3000;
-const HOST = '127.0.0.1'; 
+const HOST = '127.0.0.1';
 
-app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, () => {
   console.log(`Bad Apple Studio: http://${HOST}:${PORT}`);
+});
+
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`[Bad Apple Studio] Port ${PORT} is already in use. Another instance may already be running.`);
+    // In Electron context, this will be caught by the health-check timeout in main.js
+  } else {
+    throw err;
+  }
 });
