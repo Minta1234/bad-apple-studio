@@ -3,3 +3,6 @@ backend/jobs/
 firmware/.pio/
 firmware/data/
 .DS_Store
+.UI/
+todo.txt
+dist/

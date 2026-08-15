@@ -1,557 +1,841 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Firmware Editor — Bad Apple Studio</title>
-<style>
-  :root {
-    --arduino-teal: #00979C;
-    --arduino-teal-dark: #008184;
-    --bg:          #1e1e1e;
-    --sidebar:     #252526;
-    --topbar:      #00979C;
-    --line:        #3c3c3c;
-    --ink:         #cccccc;
-    --ink-dim:     #888888;
-    --err:         #f48771;
-    --warn:        #cca700;
-    --ok:          #89d185;
-    --tab-active:  #1e1e1e;
-    --tab-bg:      #2d2d2d;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; overflow: hidden; }
-  body {
-    display: flex;
-    flex-direction: column;
-    background: var(--bg);
-    color: var(--ink);
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-  }
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Firmware Editor — Bad Apple Studio</title>
+  <style>
+    :root {
+      --arduino-teal: #00979C;
+      --arduino-teal-dark: #008184;
+      --bg: #1e1e1e;
+      --sidebar: #252526;
+      --topbar: #00979C;
+      --line: #3c3c3c;
+      --ink: #cccccc;
+      --ink-dim: #888888;
+      --err: #f48771;
+      --warn: #cca700;
+      --ok: #89d185;
+      --tab-active: #1e1e1e;
+      --tab-bg: #2d2d2d;
+    }
 
-  /* ── Top bar (Arduino Style) ── */
-  #topbar {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    background: var(--topbar);
-    border-bottom: 1px solid var(--arduino-teal-dark);
-    padding: 0 16px;
-    height: 54px;
-    flex-shrink: 0;
-    z-index: 10;
-  }
-  
-  /* Circular Buttons */
-  .btn-arduino {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    border: none;
-    background: transparent;
-    color: #fff;
-    font-size: 18px;
-    cursor: pointer;
-    transition: background 0.2s;
-  }
-  .btn-arduino:hover { background: rgba(255,255,255,0.2); }
-  .btn-arduino:disabled { opacity: 0.5; cursor: not-allowed; }
-  
-  .top-divider { width: 1px; height: 24px; background: rgba(255,255,255,0.3); }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
 
-  #envSelect {
-    background: rgba(255,255,255,0.1);
-    border: 1px solid rgba(255,255,255,0.3);
-    color: #fff;
-    padding: 6px 12px;
-    border-radius: 4px;
-    font-family: inherit;
-    font-size: 13px;
-    cursor: pointer;
-    outline: none;
-  }
-  #envSelect option { background: #333; color: #fff; }
+    html,
+    body {
+      height: 100%;
+      overflow: hidden;
+    }
 
-  .btn-text {
-    background: rgba(255,255,255,0.1);
-    border: 1px solid rgba(255,255,255,0.2);
-    color: #fff;
-    padding: 6px 14px;
-    border-radius: 4px;
-    font-size: 13px;
-    cursor: pointer;
-    text-decoration: none;
-    transition: background 0.2s;
-  }
-  .btn-text:hover { background: rgba(255,255,255,0.2); }
+    body {
+      display: flex;
+      flex-direction: column;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
 
-  #saveStatus { font-size: 12px; color: #fff; margin-left: auto; font-weight: 600; }
+    /* ── Top bar (Arduino Style) ── */
+    #topbar {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      background: var(--topbar);
+      border-bottom: 1px solid var(--arduino-teal-dark);
+      padding: 0 16px;
+      height: 54px;
+      flex-shrink: 0;
+      z-index: 10;
+    }
 
-  /* ── Main layout ── */
-  #main {
-    display: flex;
-    flex: 1;
-    overflow: hidden;
-  }
+    /* Circular Buttons */
+    .btn-arduino {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: none;
+      background: transparent;
+      color: #fff;
+      font-size: 18px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
 
-  /* ── Sidebar ── */
-  #sidebar {
-    width: 220px;
-    background: var(--sidebar);
-    border-right: 1px solid var(--line);
-    display: flex;
-    flex-direction: column;
-    flex-shrink: 0;
-  }
-  #sidebar .s-head {
-    font-size: 11px;
-    text-transform: uppercase;
-    font-weight: 600;
-    color: var(--ink-dim);
-    padding: 14px 16px 8px;
-  }
-  .file-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 16px;
-    font-size: 13px;
-    cursor: pointer;
-    border-left: 3px solid transparent;
-  }
-  .file-item:hover   { background: #2a2d2e; }
-  .file-item.active  {
-    background: #37373d;
-    color: #fff;
-  }
-  .file-item .fi-icon { font-size: 14px; color: var(--arduino-teal); }
-  .file-item .fi-dirty {
-    margin-left: auto;
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    background: var(--warn);
-    display: none;
-  }
-  .file-item.dirty .fi-dirty { display: block; }
+    .btn-arduino:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
 
-  /* ── Editor pane ── */
-  #editorPane {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-  #monacoContainer {
-    flex: 1;
-    overflow: hidden;
-  }
+    .btn-arduino:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
 
-  /* ── Terminal / log panel ── */
-  #terminal {
-    height: 220px;
-    background: #1e1e1e;
-    border-top: 1px solid var(--line);
-    display: flex;
-    flex-direction: column;
-    flex-shrink: 0;
-    transition: height .2s;
-  }
-  #terminal.collapsed { height: 34px; }
-  #termHead {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 0 16px;
-    height: 34px;
-    background: #252526;
-    border-bottom: 1px solid var(--line);
-    flex-shrink: 0;
-    cursor: pointer;
-    user-select: none;
-  }
-  #termHead .t-title { font-size: 12px; color: var(--ink); }
-  #termHead .t-badge {
-    font-size: 11px;
-    padding: 2px 6px;
-    border-radius: 3px;
-    font-weight: 600;
-    display: none;
-  }
-  #termHead .t-badge.ok   { background: rgba(137,209,133,.2); color: var(--ok);   display: inline; }
-  #termHead .t-badge.err  { background: rgba(244,135,113,.2); color: var(--err);  display: inline; }
-  #termHead .t-badge.busy { background: rgba(0,151,156,.2);  color: var(--arduino-teal); display: inline; }
-  #termHead .t-toggle { margin-left: auto; font-size: 12px; color: var(--ink-dim); }
-  #termBody {
-    flex: 1;
-    overflow-y: auto;
-    padding: 10px 16px;
-    font-size: 13px;
-    font-family: 'Consolas', 'Courier New', monospace;
-  }
-  #terminal.collapsed #termBody { display: none; }
-  .log-line { white-space: pre-wrap; word-break: break-all; }
-  .log-line.ok   { color: var(--ok); }
-  .log-line.err  { color: var(--err); }
-  .log-line.warn { color: var(--warn); }
-  .log-line.sys  { color: var(--arduino-teal); }
+    .top-divider {
+      width: 1px;
+      height: 24px;
+      background: rgba(255, 255, 255, 0.3);
+    }
 
-  /* ── Help Modal ── */
-  #helpModal {
-    display: none;
-    position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-    background: rgba(0,0,0,0.6); z-index: 100;
-    align-items: center; justify-content: center;
-  }
-  .modal-content {
-    background: var(--bg); border: 1px solid var(--line);
-    width: 500px; padding: 24px; border-radius: 8px;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-  }
-  .modal-content h3 { color: #fff; margin-bottom: 12px; font-weight: 400; }
-  .modal-content p, .modal-content li { font-size: 14px; margin-bottom: 8px; line-height: 1.5; }
-  .modal-content ul { padding-left: 20px; margin-bottom: 16px; }
-  .modal-close {
-    background: var(--arduino-teal); color: #fff; border: none;
-    padding: 8px 16px; border-radius: 4px; cursor: pointer; float: right;
-  }
-</style>
+    #envSelect {
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      color: #fff;
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 13px;
+      cursor: pointer;
+      outline: none;
+    }
+
+    #envSelect option {
+      background: #333;
+      color: #fff;
+    }
+
+    .btn-text {
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #fff;
+      padding: 6px 14px;
+      border-radius: 4px;
+      font-size: 13px;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background 0.2s;
+    }
+
+    .btn-text:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    #saveStatus {
+      font-size: 12px;
+      color: #fff;
+      margin-left: auto;
+      font-weight: 600;
+    }
+
+    /* ── Main layout ── */
+    #main {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ── Sidebar ── */
+    #sidebar {
+      width: 220px;
+      background: var(--sidebar);
+      border-right: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+
+    #sidebar .s-head {
+      font-size: 11px;
+      text-transform: uppercase;
+      font-weight: 600;
+      color: var(--ink-dim);
+      padding: 14px 16px 8px;
+    }
+
+    .file-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 16px;
+      font-size: 13px;
+      cursor: pointer;
+      border-left: 3px solid transparent;
+    }
+
+    .file-item:hover {
+      background: #2a2d2e;
+    }
+
+    .file-item.active {
+      background: #37373d;
+      color: #fff;
+    }
+
+    .file-item .fi-icon {
+      font-size: 14px;
+      color: var(--arduino-teal);
+    }
+
+    .file-item .fi-dirty {
+      margin-left: auto;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--warn);
+      display: none;
+    }
+
+    .file-item.dirty .fi-dirty {
+      display: block;
+    }
+
+    /* ── Editor pane ── */
+    #editorPane {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #monacoContainer {
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ── Terminal / log panel ── */
+    #terminal {
+      height: 220px;
+      background: #1e1e1e;
+      border-top: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      transition: height .2s;
+    }
+
+    #terminal.collapsed {
+      height: 34px;
+    }
+
+    #termHead {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 16px;
+      height: 34px;
+      background: #252526;
+      border-bottom: 1px solid var(--line);
+      flex-shrink: 0;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    #termHead .t-title {
+      font-size: 12px;
+      color: var(--ink);
+    }
+
+    #termHead .t-badge {
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-weight: 600;
+      display: none;
+    }
+
+    #termHead .t-badge.ok {
+      background: rgba(137, 209, 133, .2);
+      color: var(--ok);
+      display: inline;
+    }
+
+    #termHead .t-badge.err {
+      background: rgba(244, 135, 113, .2);
+      color: var(--err);
+      display: inline;
+    }
+
+    #termHead .t-badge.busy {
+      background: rgba(0, 151, 156, .2);
+      color: var(--arduino-teal);
+      display: inline;
+    }
+
+    #termHead .t-toggle {
+      margin-left: auto;
+      font-size: 12px;
+      color: var(--ink-dim);
+    }
+
+    #termBody {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 16px;
+      font-size: 13px;
+      font-family: 'Consolas', 'Courier New', monospace;
+    }
+
+    #terminal.collapsed #termBody {
+      display: none;
+    }
+
+    .log-line {
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .log-line.ok {
+      color: var(--ok);
+    }
+
+    .log-line.err {
+      color: var(--err);
+    }
+
+    .log-line.warn {
+      color: var(--warn);
+    }
+
+    .log-line.sys {
+      color: var(--arduino-teal);
+    }
+
+    /* ── Help Modal ── */
+    #helpModal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal-content {
+      background: var(--bg);
+      border: 1px solid var(--line);
+      width: 500px;
+      padding: 24px;
+      border-radius: 8px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    }
+
+    .modal-content h3 {
+      color: #fff;
+      margin-bottom: 12px;
+      font-weight: 400;
+    }
+
+    .modal-content p,
+    .modal-content li {
+      font-size: 14px;
+      margin-bottom: 8px;
+      line-height: 1.5;
+    }
+
+    .modal-content ul {
+      padding-left: 20px;
+      margin-bottom: 16px;
+    }
+
+    .modal-close {
+      background: var(--arduino-teal);
+      color: #fff;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      float: right;
+    }
+  </style>
 </head>
+
 <body>
 
-<!-- ── Help Modal ── -->
-<div id="helpModal">
-  <div class="modal-content">
-    <h3>How to use the Firmware Editor</h3>
-    <p>This editor works just like the Arduino IDE but directly in your browser:</p>
-    <ul>
-      <li><strong>Modify Code:</strong> Select <code>main.cpp</code> to edit the core Bad Apple video player logic.</li>
-      <li><strong>Save:</strong> Press <code>Ctrl+S</code> or the Save button to save changes to the server.</li>
-      <li><strong>Verify (Compile):</strong> Click the <strong>✔</strong> button top-left to compile the firmware for the selected board environment.</li>
-      <li><strong>Flash:</strong> After compilation is successful, go back to the main page to flash the new firmware to your ESP32 over USB!</li>
-    </ul>
-    <p><em>Note: Since it compiles on your local server, the first compilation might take a minute as it downloads the PlatformIO toolchain.</em></p>
-    <button class="modal-close" onclick="document.getElementById('helpModal').style.display='none'">Got it</button>
-  </div>
-</div>
-
-<!-- ── Top bar ── -->
-<div id="topbar">
-  <button class="btn-arduino" id="compileBtn" title="Verify / Compile">✔</button>
-  <button class="btn-arduino" id="saveBtn" title="Save (Ctrl+S)">💾</button>
-  <div class="top-divider"></div>
-  <select id="envSelect" title="Board Environment">
-    <option value="esp32-oled096">esp32-oled096 (SSD1306)</option>
-    <option value="esp32-oled130">esp32-oled130 (SH1106)</option>
-    <option value="esp32-ili9341">esp32-ili9341 (ESP32-2432S028)</option>
-  </select>
-  <span id="saveStatus"></span>
-  <button class="btn-text" onclick="document.getElementById('helpModal').style.display='flex'">Help</button>
-  <button class="btn-text" onclick="location.href='/'">← Back</button>
-</div>
-
-<!-- ── Main ── -->
-<div id="main">
-
-  <!-- Sidebar -->
-  <div id="sidebar">
-    <div class="s-head">Sketch Files</div>
-    <div id="fileList"></div>
-  </div>
-
-  <!-- Editor + Terminal -->
-  <div id="editorPane">
-    <div id="monacoContainer"></div>
-
-    <div id="terminal">
-      <div id="termHead">
-        <span class="t-title">Output</span>
-        <span id="termBadge" class="t-badge"></span>
-        <span class="t-toggle" id="termToggle">▼</span>
-      </div>
-      <div id="termBody"></div>
+  <!-- ── Help Modal ── -->
+  <div id="helpModal">
+    <div class="modal-content">
+      <h3>How to use the Firmware Editor</h3>
+      <p>This editor works just like the Arduino IDE but directly in your browser:</p>
+      <ul>
+        <li><strong>Modify Code:</strong> Select <code>main.cpp</code> to edit the core Bad Apple video player logic.
+        </li>
+        <li><strong>Save:</strong> Press <code>Ctrl+S</code> or the Save button to save changes to the server.</li>
+        <li><strong>Verify (Compile):</strong> Click the <strong>✔</strong> button top-left to compile the firmware for
+          the selected board environment.</li>
+        <li><strong>Flash:</strong> After compilation is successful, go back to the main page to flash the new firmware
+          to your ESP32 over USB!</li>
+      </ul>
+      <p><em>Note: Since it compiles on your local server, the first compilation might take a minute as it downloads the
+          PlatformIO toolchain.</em></p>
+      <button class="modal-close" onclick="document.getElementById('helpModal').style.display='none'">Got it</button>
     </div>
   </div>
 
-</div>
+  <!-- ── Board Configurator Modal ── -->
+  <div id="boardModal"
+    style="display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.6); z-index:100; align-items:center; justify-content:center;">
+    <div class="modal-content" style="width:600px; max-height: 90vh; overflow-y:auto;">
+      <h3 style="color:var(--arduino-teal); font-weight:600;">➕ Add Custom Board & Display</h3>
+      <p>Search for a display library from PlatformIO and configure the pin map to generate a new environment.</p>
 
-<!-- Monaco Editor from CDN -->
-<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.47.0/min/vs/loader.js"></script>
-<script>
-// ── State ──────────────────────────────────────────────────────────────────
-let editor       = null;
-let currentFileId = null;
-const models     = {}; // id → { model, lang, dirty }
-const filesMeta  = []; // [{id, label, lang}]
+      <div style="margin-bottom: 16px;">
+        <label style="display:block; margin-bottom:4px; font-size:12px; color:var(--ink-dim);">1. Search Display Library
+          (PlatformIO Registry)</label>
+        <div style="display:flex; gap:8px;">
+          <input type="text" id="libSearchInput" placeholder="e.g. TFT_eSPI or Adafruit SSD1306"
+            style="flex:1; padding:8px; background:#1e1e1e; color:#fff; border:1px solid var(--line); border-radius:4px; outline:none;"
+            onkeydown="if(event.key==='Enter') searchDisplayLib()">
+          <button class="btn-text" onclick="searchDisplayLib()" id="libSearchBtn">Search</button>
+        </div>
+        <div id="libSearchResults"
+          style="margin-top:8px; max-height:180px; overflow-y:auto; background:#1e1e1e; border:1px solid var(--line); border-radius:4px; display:none;">
+        </div>
+        <input type="hidden" id="selectedLibId">
+      </div>
 
-// ── Monaco init ─────────────────────────────────────────────────────────────
-require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.47.0/min/vs' } });
-require(['vs/editor/editor.main'], () => {
-  // Define a dark theme matching the app's phosphor palette
-  monaco.editor.defineTheme('badapple', {
-    base: 'vs-dark',
-    inherit: true,
-    rules: [
-      { token: '',               foreground: 'd6f5e3', background: '0d1117' },
-      { token: 'comment',        foreground: '4a6a58', fontStyle: 'italic' },
-      { token: 'keyword',        foreground: '7dffb3', fontStyle: 'bold' },
-      { token: 'string',         foreground: 'ffc36b' },
-      { token: 'number',         foreground: '5b9cf6' },
-      { token: 'type',           foreground: 'c9a7ff' },
-      { token: 'delimiter',      foreground: '6f8b7c' },
-      { token: 'identifier',     foreground: 'd6f5e3' },
-    ],
-    colors: {
-      'editor.background':           '#0d1117',
-      'editor.foreground':           '#d6f5e3',
-      'editorLineNumber.foreground': '#3a5a48',
-      'editorCursor.foreground':     '#7dffb3',
-      'editor.selectionBackground':  '#1e4032',
-      'editor.lineHighlightBackground': '#0f1a13',
-      'editorBracketMatch.background': '#1e4032',
-      'editorBracketMatch.border':   '#7dffb3',
-      'scrollbarSlider.background':  '#1c2733',
-    },
-  });
+      <div style="margin-bottom: 16px;">
+        <label style="display:block; margin-bottom:4px; font-size:12px; color:var(--ink-dim);">2. Board
+          Identifier</label>
+        <input type="text" id="boardIdInput" placeholder="e.g. esp32dev, esp32-s3-devkitc-1"
+          style="width:100%; padding:8px; background:#1e1e1e; color:#fff; border:1px solid var(--line); border-radius:4px; outline:none;">
+        <small style="color:var(--ink-dim); margin-top:4px; display:block;">Use the exact PlatformIO board ID.</small>
+      </div>
 
-  editor = monaco.editor.create(document.getElementById('monacoContainer'), {
-    theme:            'badapple',
-    fontSize:         14,
-    fontFamily:       "'IBM Plex Mono', 'Cascadia Code', 'Fira Code', ui-monospace, monospace",
-    fontLigatures:    true,
-    lineNumbers:      'on',
-    minimap:          { enabled: true },
-    scrollBeyondLastLine: false,
-    automaticLayout:  true,
-    tabSize:          2,
-    insertSpaces:     true,
-    wordWrap:         'off',
-    renderWhitespace: 'selection',
-    bracketPairColorization: { enabled: true },
-  });
+      <div style="margin-bottom: 16px;">
+        <label style="display:block; margin-bottom:4px; font-size:12px; color:var(--ink-dim);">3. Pin Map Generation
+          (Optional)</label>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+          <input type="text" id="pinSdaInput" placeholder="SDA / MOSI Pin (e.g. 21)"
+            style="padding:8px; background:#1e1e1e; color:#fff; border:1px solid var(--line); border-radius:4px; outline:none;">
+          <input type="text" id="pinSclInput" placeholder="SCL / SCK Pin (e.g. 22)"
+            style="padding:8px; background:#1e1e1e; color:#fff; border:1px solid var(--line); border-radius:4px; outline:none;">
+          <input type="text" id="pinCsInput" placeholder="CS Pin"
+            style="padding:8px; background:#1e1e1e; color:#fff; border:1px solid var(--line); border-radius:4px; outline:none;">
+          <input type="text" id="pinDcInput" placeholder="DC Pin"
+            style="padding:8px; background:#1e1e1e; color:#fff; border:1px solid var(--line); border-radius:4px; outline:none;">
+          <input type="text" id="pinRstInput" placeholder="RST Pin"
+            style="padding:8px; background:#1e1e1e; color:#fff; border:1px solid var(--line); border-radius:4px; outline:none;">
+        </div>
+      </div>
 
-  // Mark model dirty on edit
-  editor.onDidChangeModelContent(() => {
-    if (currentFileId && models[currentFileId]) {
-      setDirty(currentFileId, true);
+      <div style="display:flex; justify-content:space-between; margin-top:24px;">
+        <button class="btn-text" onclick="document.getElementById('boardModal').style.display='none'">Cancel</button>
+        <button class="btn-text" style="background:var(--arduino-teal); color:#fff;" onclick="addCustomBoard()">Generate
+          & Add Environment</button>
+      </div>
+    </div>
+  </div>
+  <!-- ── Top bar ── -->
+  <div id="topbar">
+    <button class="btn-arduino" id="compileBtn" title="Verify / Compile">✔</button>
+    <button class="btn-arduino" id="saveBtn" title="Save (Ctrl+S)">💾</button>
+    <div class="top-divider"></div>
+    <select id="envSelect" title="Board Environment">
+      <!-- Populated dynamically via JS -->
+    </select>
+    <span id="saveStatus"></span>
+    <button class="btn-text" onclick="document.getElementById('boardModal').style.display='flex'"
+      style="margin-left: 8px; border-color: var(--arduino-teal);">➕ Add Board</button>
+    <button class="btn-text" onclick="document.getElementById('helpModal').style.display='flex'">Help</button>
+    <button class="btn-text" onclick="location.href='/'">← Back</button>
+  </div>
+
+  <!-- ── Main ── -->
+  <div id="main">
+
+    <!-- Sidebar -->
+    <div id="sidebar">
+      <div class="s-head">Sketch Files</div>
+      <div id="fileList"></div>
+    </div>
+
+    <!-- Editor + Terminal -->
+    <div id="editorPane">
+      <div id="monacoContainer"></div>
+
+      <div id="terminal">
+        <div id="termHead">
+          <span class="t-title">Output</span>
+          <span id="termBadge" class="t-badge"></span>
+          <span class="t-toggle" id="termToggle">▼</span>
+        </div>
+        <div id="termBody"></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Monaco Editor from CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.47.0/min/vs/loader.js"></script>
+  <script>
+    // ── State ──────────────────────────────────────────────────────────────────
+    let editor = null;
+    let currentFileId = null;
+    const models = {}; // id → { model, lang, dirty }
+    const filesMeta = []; // [{id, label, lang}]
+
+    // ── Monaco init ─────────────────────────────────────────────────────────────
+    require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.47.0/min/vs' } });
+    require(['vs/editor/editor.main'], () => {
+      // Define a dark theme matching the app's phosphor palette
+      monaco.editor.defineTheme('badapple', {
+        base: 'vs-dark',
+        inherit: true,
+        rules: [
+          { token: '', foreground: 'd6f5e3', background: '0d1117' },
+          { token: 'comment', foreground: '4a6a58', fontStyle: 'italic' },
+          { token: 'keyword', foreground: '7dffb3', fontStyle: 'bold' },
+          { token: 'string', foreground: 'ffc36b' },
+          { token: 'number', foreground: '5b9cf6' },
+          { token: 'type', foreground: 'c9a7ff' },
+          { token: 'delimiter', foreground: '6f8b7c' },
+          { token: 'identifier', foreground: 'd6f5e3' },
+        ],
+        colors: {
+          'editor.background': '#1e1e1e',
+          'editor.foreground': '#cccccc',
+          'editorLineNumber.foreground': '#888888',
+          'editorCursor.foreground': '#00979C',
+          'editor.selectionBackground': '#264f78',
+          'editor.lineHighlightBackground': '#2d2d30',
+          'editorBracketMatch.background': '#000000',
+          'editorBracketMatch.border': '#888888',
+          'scrollbarSlider.background': '#424242',
+        },
+      });
+
+      editor = monaco.editor.create(document.getElementById('monacoContainer'), {
+        theme: 'badapple',
+        fontSize: 14,
+        fontFamily: "'Segoe UI', 'Cascadia Code', 'Fira Code', ui-monospace, monospace",
+        fontLigatures: true,
+        lineNumbers: 'on',
+        minimap: { enabled: true },
+        scrollBeyondLastLine: false,
+        automaticLayout: true,
+        tabSize: 2,
+        insertSpaces: true,
+        wordWrap: 'off',
+        renderWhitespace: 'selection',
+        bracketPairColorization: { enabled: true },
+      });
+
+      // Mark model dirty on edit
+      editor.onDidChangeModelContent(() => {
+        if (currentFileId && models[currentFileId]) {
+          setDirty(currentFileId, true);
+        }
+      });
+
+      loadFileList();
+      loadEnvironments();
+    });
+
+    // ── Environments ─────────────────────────────────────────────────────────────
+    async function loadEnvironments() {
+      try {
+        const res = await fetch('/api/firmware/envs');
+        const envs = await res.json();
+        const select = document.getElementById('envSelect');
+        select.innerHTML = '';
+        envs.forEach(env => {
+          const option = document.createElement('option');
+          option.value = env.id;
+          option.textContent = env.label + ` (${env.width}x${env.height})`;
+          select.appendChild(option);
+        });
+      } catch (err) {
+        console.error('Failed to load environments:', err);
+      }
     }
-  });
 
-  loadFileList();
-});
+    // ── File list ────────────────────────────────────────────────────────────────
+    async function loadFileList() {
+      const res = await fetch('/api/firmware/files');
+      const list = await res.json();
+      filesMeta.push(...list);
 
-// ── File list ────────────────────────────────────────────────────────────────
-async function loadFileList() {
-  const res  = await fetch('/api/firmware/files');
-  const list = await res.json();
-  filesMeta.push(...list);
-
-  const container = document.getElementById('fileList');
-  for (const f of list) {
-    const el = document.createElement('div');
-    el.className  = 'file-item';
-    el.dataset.id = f.id;
-    el.innerHTML  = `
+      const container = document.getElementById('fileList');
+      for (const f of list) {
+        const el = document.createElement('div');
+        el.className = 'file-item';
+        el.dataset.id = f.id;
+        el.innerHTML = `
       <span class="fi-icon">${langIcon(f.lang)}</span>
       <span>${f.label}</span>
       <span class="fi-dirty"></span>`;
-    el.addEventListener('click', () => openFile(f.id));
-    container.appendChild(el);
-  }
+        el.addEventListener('click', () => openFile(f.id));
+        container.appendChild(el);
+      }
 
-  // Auto-open first file
-  if (list.length) openFile(list[0].id);
-}
+      // Auto-open first file
+      if (list.length) openFile(list[0].id);
+    }
 
-async function openFile(id) {
-  // Save current file before switching
-  if (currentFileId && models[currentFileId]?.dirty) {
-    await saveFile(currentFileId, { silent: true });
-  }
+    async function openFile(id) {
+      // Save current file before switching
+      if (currentFileId && models[currentFileId]?.dirty) {
+        await saveFile(currentFileId, { silent: true });
+      }
 
-  // Fetch content if not yet loaded
-  if (!models[id]) {
-    const meta = filesMeta.find((f) => f.id === id);
-    const res  = await fetch(`/api/firmware/files/${id}`);
-    const text = await res.text();
-    const lang = monacoLang(meta?.lang || 'text');
-    const model = monaco.editor.createModel(text, lang);
-    models[id] = { model, lang, dirty: false };
-  }
+      // Fetch content if not yet loaded
+      if (!models[id]) {
+        const meta = filesMeta.find((f) => f.id === id);
+        const res = await fetch(`/api/firmware/files/${id}`);
+        const text = await res.text();
+        const lang = monacoLang(meta?.lang || 'text');
+        const model = monaco.editor.createModel(text, lang);
+        models[id] = { model, lang, dirty: false };
+      }
 
-  editor.setModel(models[id].model);
-  currentFileId = id;
+      editor.setModel(models[id].model);
+      currentFileId = id;
 
-  // Update sidebar highlight
-  document.querySelectorAll('.file-item').forEach((el) => {
-    el.classList.toggle('active', el.dataset.id === id);
-  });
-}
+      // Update sidebar highlight
+      document.querySelectorAll('.file-item').forEach((el) => {
+        el.classList.toggle('active', el.dataset.id === id);
+      });
+    }
 
-// ── Save ─────────────────────────────────────────────────────────────────────
-document.getElementById('saveBtn').addEventListener('click', () => saveFile(currentFileId));
+    // ── Save ─────────────────────────────────────────────────────────────────────
+    document.getElementById('saveBtn').addEventListener('click', () => saveFile(currentFileId));
 
-async function saveFile(id, { silent = false } = {}) {
-  if (!id || !models[id]) return;
-  const content = models[id].model.getValue();
+    async function saveFile(id, { silent = false } = {}) {
+      if (!id || !models[id]) return;
+      const content = models[id].model.getValue();
 
-  if (!silent) setSaveStatus('saving…', '');
+      if (!silent) setSaveStatus('saving…', '');
 
-  const res = await fetch(`/api/firmware/files/${id}`, {
-    method:  'PUT',
-    headers: { 'Content-Type': 'text/plain' },
-    body:    content,
-  });
+      const res = await fetch(`/api/firmware/files/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'text/plain' },
+        body: content,
+      });
 
-  if (res.ok) {
-    setDirty(id, false);
-    if (!silent) setSaveStatus('✓ saved', 'ok');
-  } else {
-    const j = await res.json().catch(() => ({}));
-    if (!silent) setSaveStatus('✗ ' + (j.error || 'error'), 'err');
-  }
-}
-
-// Ctrl+S shortcut
-window.addEventListener('keydown', (e) => {
-  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-    e.preventDefault();
-    saveFile(currentFileId);
-  }
-});
-
-function setSaveStatus(msg, cls) {
-  const el = document.getElementById('saveStatus');
-  el.textContent  = msg;
-  el.className    = cls;
-  if (cls === 'ok') setTimeout(() => { el.textContent = ''; el.className = ''; }, 2500);
-}
-
-function setDirty(id, dirty) {
-  if (!models[id]) return;
-  models[id].dirty = dirty;
-  const el = document.querySelector(`.file-item[data-id="${id}"]`);
-  el?.classList.toggle('dirty', dirty);
-}
-
-// ── Compile ───────────────────────────────────────────────────────────────────
-const compileBtn  = document.getElementById('compileBtn');
-const termBadge   = document.getElementById('termBadge');
-const termBody    = document.getElementById('termBody');
-const terminal    = document.getElementById('terminal');
-
-compileBtn.addEventListener('click', async () => {
-  // Save all dirty files first
-  for (const id of Object.keys(models)) {
-    if (models[id].dirty) await saveFile(id, { silent: true });
-  }
-
-  compileBtn.disabled = true;
-  clearTerminal();
-  expandTerminal();
-  setBadge('busy', '⬤ building…');
-  appendLog('▶ Compiling firmware…', 'sys');
-
-  const env = document.getElementById('envSelect').value;
-
-  const res = await fetch('/api/firmware/compile', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ env }),
-  });
-
-  const reader  = res.body.getReader();
-  const decoder = new TextDecoder();
-  let   buf     = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-
-    // Parse SSE frames
-    const parts = buf.split('\n\n');
-    buf = parts.pop(); // last partial frame stays in buffer
-
-    for (const block of parts) {
-      const eventMatch = block.match(/^event: (\w+)/m);
-      const dataMatch  = block.match(/^data: (.+)/m);
-      if (!dataMatch) continue;
-
-      let payload;
-      try { payload = JSON.parse(dataMatch[1]); } catch { continue; }
-
-      const eventType = eventMatch?.[1] || 'log';
-
-      if (eventType === 'start') {
-        appendLog(`$ pio run -e ${payload.env}`, 'sys');
-      } else if (eventType === 'log') {
-        appendLog(payload.line);
-      } else if (eventType === 'done') {
-        if (payload.success) {
-          appendLog('\n✓ Compile OK — firmware ready in .pio/build/', 'ok');
-          setBadge('ok', '✓ OK');
-        } else {
-          appendLog(`\n✗ Compile failed (exit ${payload.code})`, 'err');
-          setBadge('err', '✗ ERROR');
-        }
-        compileBtn.disabled = false;
-      } else if (eventType === 'error') {
-        appendLog('✗ ' + payload.message, 'err');
-        setBadge('err', '✗ ERROR');
-        compileBtn.disabled = false;
+      if (res.ok) {
+        setDirty(id, false);
+        if (!silent) setSaveStatus('✓ saved', 'ok');
+      } else {
+        const j = await res.json().catch(() => ({}));
+        if (!silent) setSaveStatus('✗ ' + (j.error || 'error'), 'err');
       }
     }
-  }
-});
 
-// ── Terminal helpers ─────────────────────────────────────────────────────────
-document.getElementById('termHead').addEventListener('click', () => {
-  terminal.classList.toggle('collapsed');
-  document.getElementById('termToggle').textContent =
-    terminal.classList.contains('collapsed') ? '▲' : '▼';
-});
+    // Ctrl+S shortcut
+    window.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        saveFile(currentFileId);
+      }
+    });
 
-function expandTerminal() {
-  terminal.classList.remove('collapsed');
-  document.getElementById('termToggle').textContent = '▼';
-}
+    function setSaveStatus(msg, cls) {
+      const el = document.getElementById('saveStatus');
+      el.textContent = msg;
+      el.className = cls;
+      if (cls === 'ok') setTimeout(() => { el.textContent = ''; el.className = ''; }, 2500);
+    }
 
-function clearTerminal() {
-  termBody.innerHTML = '';
-  termBadge.className = 't-badge';
-  termBadge.textContent = '';
-}
+    function setDirty(id, dirty) {
+      if (!models[id]) return;
+      models[id].dirty = dirty;
+      const el = document.querySelector(`.file-item[data-id="${id}"]`);
+      el?.classList.toggle('dirty', dirty);
+    }
 
-function appendLog(line, cls = '') {
-  const el = document.createElement('div');
-  el.className = 'log-line' + (cls ? ' ' + cls : '');
-  // Colorize common patterns even without explicit class
-  if (!cls) {
-    if (/error:/i.test(line))   el.classList.add('err');
-    else if (/warning:/i.test(line)) el.classList.add('warn');
-    else if (/\[SUCCESS\]|Linking|Compiling/.test(line)) el.classList.add('ok');
-  }
-  el.textContent = line;
-  termBody.appendChild(el);
-  termBody.scrollTop = termBody.scrollHeight;
-}
+    // ── Compile ───────────────────────────────────────────────────────────────────
+    const compileBtn = document.getElementById('compileBtn');
+    const termBadge = document.getElementById('termBadge');
+    const termBody = document.getElementById('termBody');
+    const terminal = document.getElementById('terminal');
 
-function setBadge(cls, text) {
-  termBadge.className = `t-badge ${cls}`;
-  termBadge.textContent = text;
-}
+    compileBtn.addEventListener('click', async () => {
+      // Save all dirty files first
+      for (const id of Object.keys(models)) {
+        if (models[id].dirty) await saveFile(id, { silent: true });
+      }
 
-// ── Utility ──────────────────────────────────────────────────────────────────
-function langIcon(lang) {
-  return { cpp: '⚙', ini: '⚙', text: '📄', csv: '📊' }[lang] || '📄';
-}
-function monacoLang(lang) {
-  return { cpp: 'cpp', ini: 'ini', text: 'plaintext', csv: 'plaintext' }[lang] || 'plaintext';
-}
-</script>
+      compileBtn.disabled = true;
+      clearTerminal();
+      expandTerminal();
+      setBadge('busy', '⬤ building…');
+      appendLog('▶ Compiling firmware…', 'sys');
+
+      const env = document.getElementById('envSelect').value;
+
+      const res = await fetch('/api/firmware/compile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ env }),
+      });
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+
+        // Parse SSE frames
+        const parts = buf.split('\n\n');
+        buf = parts.pop(); // last partial frame stays in buffer
+
+        for (const block of parts) {
+          const eventMatch = block.match(/^event: (\w+)/m);
+          const dataMatch = block.match(/^data: (.+)/m);
+          if (!dataMatch) continue;
+
+          let payload;
+          try { payload = JSON.parse(dataMatch[1]); } catch { continue; }
+
+          const eventType = eventMatch?.[1] || 'log';
+
+          if (eventType === 'start') {
+            appendLog(`$ pio run -e ${payload.env}`, 'sys');
+          } else if (eventType === 'log') {
+            appendLog(payload.line);
+          } else if (eventType === 'done') {
+            if (payload.success) {
+              appendLog('\n✓ Compile OK — firmware ready in .pio/build/', 'ok');
+              setBadge('ok', '✓ OK');
+            } else {
+              appendLog(`\n✗ Compile failed (exit ${payload.code})`, 'err');
+              setBadge('err', '✗ ERROR');
+            }
+            compileBtn.disabled = false;
+          } else if (eventType === 'error') {
+            appendLog('✗ ' + payload.message, 'err');
+            setBadge('err', '✗ ERROR');
+            compileBtn.disabled = false;
+          }
+        }
+      }
+    });
+
+    // ── Terminal helpers ─────────────────────────────────────────────────────────
+    document.getElementById('termHead').addEventListener('click', () => {
+      terminal.classList.toggle('collapsed');
+      document.getElementById('termToggle').textContent =
+        terminal.classList.contains('collapsed') ? '▲' : '▼';
+    });
+
+    function expandTerminal() {
+      terminal.classList.remove('collapsed');
+      document.getElementById('termToggle').textContent = '▼';
+    }
+
+    function clearTerminal() {
+      termBody.innerHTML = '';
+      termBadge.className = 't-badge';
+      termBadge.textContent = '';
+    }
+
+    function appendLog(line, cls = '') {
+      const el = document.createElement('div');
+      el.className = 'log-line' + (cls ? ' ' + cls : '');
+      // Colorize common patterns even without explicit class
+      if (!cls) {
+        if (/error:/i.test(line)) el.classList.add('err');
+        else if (/warning:/i.test(line)) el.classList.add('warn');
+        else if (/\[SUCCESS\]|Linking|Compiling/.test(line)) el.classList.add('ok');
+      }
+      el.textContent = line;
+      termBody.appendChild(el);
+      termBody.scrollTop = termBody.scrollHeight;
+    }
+
+    function setBadge(cls, text) {
+      termBadge.className = `t-badge ${cls}`;
+      termBadge.textContent = text;
+    }
+
+    // ── Utility ──────────────────────────────────────────────────────────────────
+    function langIcon(lang) {
+      return { cpp: '⚙', ini: '⚙', text: '📄', csv: '📊' }[lang] || '📄';
+    }
+    function monacoLang(lang) {
+      return { cpp: 'cpp', ini: 'ini', text: 'plaintext', csv: 'plaintext' }[lang] || 'plaintext';
+    }
+    // ── Board Configurator Modal Logic ───────────────────────────────────────────
+    async function searchDisplayLib() {
+      const q = document.getElementById('libSearchInput').value.trim();
+      if (!q) return;
+      const btn = document.getElementById('libSearchBtn');
+      btn.textContent = '...';
+      try {
+        const res = await fetch(`/api/boards/search?q=${encodeURIComponent(q)}`);
+        const data = await res.json();
+        const list = document.getElementById('libSearchResults');
+        list.innerHTML = '';
+        list.style.display = 'block';
+        if (!data.libs || data.libs.length === 0) {
+          list.innerHTML = '<div style="padding:12px; color:var(--ink-dim); text-align:center;">No libraries found.</div>';
+        } else {
+          data.libs.forEach(item => {
+            const div = document.createElement('div');
+            div.style.cssText = 'padding:10px 12px; border-bottom:1px solid var(--line); cursor:pointer; transition:background 0.2s;';
+            div.innerHTML = `<strong style="color:var(--arduino-teal); font-size:14px;">${item.name}</strong> <small style="color:var(--ink-dim);">v${item.version}</small>
+                         <div style="font-size:12px; margin-top:4px; color:var(--ink);">${item.description}</div>`;
+            div.onmouseover = () => div.style.background = '#2a2d2e';
+            div.onmouseout = () => div.style.background = 'transparent';
+            div.onclick = () => {
+              document.getElementById('selectedLibId').value = item.lib_deps || item.name;
+              document.getElementById('libSearchInput').value = item.name;
+              list.style.display = 'none';
+            };
+            list.appendChild(div);
+          });
+        }
+      } catch (err) {
+        alert('Search failed: ' + err.message);
+      } finally {
+        btn.textContent = 'Search';
+      }
+    }
+
+    async function addCustomBoard() {
+      const lib = document.getElementById('selectedLibId').value || document.getElementById('libSearchInput').value;
+      const boardId = document.getElementById('boardIdInput').value;
+      const pins = {
+        sda: document.getElementById('pinSdaInput').value,
+        scl: document.getElementById('pinSclInput').value,
+        cs: document.getElementById('pinCsInput').value,
+        dc: document.getElementById('pinDcInput').value,
+        rst: document.getElementById('pinRstInput').value,
+      };
+
+      if (!boardId || !lib) {
+        alert('Please provide a Board Identifier and select a Display Library.');
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/boards/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ boardId, library: lib, pins })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to add board');
+
+        alert(`Successfully added environment [env:${boardId}]\nPlatformIO config updated.`);
+        document.getElementById('boardModal').style.display = 'none';
+        loadEnvironments(); // Refresh dropdown
+
+        // Also reload the file list in case platformio.ini is modified and we want to see it
+        document.getElementById('fileList').innerHTML = '';
+        filesMeta.length = 0;
+        loadFileList();
+      } catch (err) {
+        alert('Error: ' + err.message);
+      }
+    }
+  </script>
 </body>
+
 </html>

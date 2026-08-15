@@ -4,8 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bad Apple Studio — ESP32 OLED</title>
-<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js"></script>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+<link rel="icon" href="https://cdn-minta.kawinphopkodsombat.workers.dev/download/favicon.ico">
+<script type="module" src="/script/install-button.js"></script>
+<link href="/script/bootstrap.min.css" rel="stylesheet">
 <style>
   :root {
     --hair:    #F7F7FB;
@@ -121,6 +122,94 @@
     0% { transform: translate(0, 0) scale(1); }
     100% { transform: translate(5%, 10%) scale(1.1); }
   }
+
+/* ── Health banner ── */
+#healthBanner { display: none; border-radius: 12px; font-size: 0.85rem; margin-bottom: 1rem; }
+
+/* ── Rotation preview ── */
+.rotation-preview-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  background: rgba(45,187,235,0.05);
+  border: 1px solid rgba(45,187,235,0.2);
+  border-radius: 12px;
+  padding: 12px;
+}
+.rotation-preview-wrap canvas {
+  border-radius: 6px;
+  image-rendering: pixelated;
+  background: #000;
+  max-width: 100%;
+}
+.rotation-buttons { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.rot-btn {
+  background: rgba(45,187,235,0.1); border: 1px solid rgba(45,187,235,0.3);
+  color: var(--tie); border-radius: 8px; padding: 4px 12px; cursor: pointer;
+  font-size: 0.8rem; font-weight: 600; transition: all 0.2s;
+}
+.rot-btn.active, .rot-btn:hover {
+  background: var(--tie); color: #fff;
+  box-shadow: 0 2px 8px rgba(45,187,235,0.3);
+}
+
+/* ── Debug Monitor ── */
+#debugPanel {
+  background: #0d1117;
+  border: 1px solid rgba(45,187,235,0.25);
+  border-radius: 16px;
+  color: #7dffb3;
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  font-size: 0.78rem;
+}
+#debugTerminal {
+  height: 200px; overflow-y: auto; padding: 10px;
+  background: #0a0e14; border-radius: 8px;
+  border: 1px solid rgba(45,187,235,0.15);
+  white-space: pre-wrap; word-break: break-all;
+}
+#debugCanvas {
+  border-radius: 8px; image-rendering: pixelated;
+  background: #000; width: 100%; max-width: 320px;
+}
+/* Auto-close checkmark animation */
+.success-checkmark {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 9999;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+.success-checkmark.show {
+  display: flex;
+  opacity: 1;
+}
+.check-icon-wrapper {
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #7dffb3, #2ecc71);
+  box-shadow: 0 10px 30px rgba(46, 204, 113, 0.3);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  transform: scale(0);
+}
+.success-checkmark.show .check-icon-wrapper {
+  animation: popIn 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+@keyframes popIn {
+  0% { transform: scale(0); }
+  100% { transform: scale(1); }
+}
 </style>
 </head>
 <body>
@@ -137,7 +226,9 @@
     <p class="text-sub mt-2">Upload a video, pick a display, and flash directly over USB from this browser — nothing leaves your machine.</p>
   </header>
 
-  <div class="glass-card p-4 mb-4">
+  <div id="healthBanner" class="alert mb-3" role="alert"></div>
+
+<div class="glass-card p-4 mb-4">
     <h5 class="text-uppercase text-tie fw-bold mb-4" style="font-size: 0.85rem; letter-spacing: 0.1em;">
       ▸ Video Settings
     </h5>
@@ -149,12 +240,17 @@
       </div>
 
       <div class="mb-3">
-        <label for="display" class="form-label text-sub fw-medium">Display</label>
+        <div class="d-flex align-items-center justify-content-between mb-1">
+          <label for="display" class="form-label text-sub fw-medium mb-0">Display &amp; Board</label>
+          <div class="d-flex gap-2">
+            <button type="button" class="rot-btn" style="font-size:0.75rem; padding:4px 10px;" onclick="detectBoard()">🔌 Detect</button>
+            <button type="button" class="rot-btn" style="font-size:0.75rem; padding:4px 10px;" onclick="openBoardsManager()">📦 Boards Manager</button>
+          </div>
+        </div>
         <select class="form-select" id="display" name="display">
-          <option value="0.96">0.96" — SSD1306 (128x64)</option>
-          <option value="1.3">1.3" — SH1106 (128x64)</option>
-          <option value="2432s028">2.8" — ILI9341 (ESP32-2432S028)</option>
+          <!-- Populated dynamically via JS -->
         </select>
+        <small id="detectedBoardInfo" class="text-sub" style="display:none; margin-top:4px;"></small>
       </div>
 
       <div class="row g-3 mb-3">
@@ -171,6 +267,39 @@
       <div class="form-check mb-2">
         <input class="form-check-input" type="checkbox" id="invert" name="invert">
         <label class="form-check-label text-sub" for="invert">Invert colors</label>
+      </div>
+
+      <!-- Rotation Selector + Live Preview -->
+      <div class="mb-3">
+        <label class="form-label text-sub fw-medium">Screen Rotation & Zoom</label>
+        <input type="hidden" id="rotation" name="rotation" value="0">
+        <input type="hidden" id="zoom" name="zoom" value="1.0">
+        <input type="hidden" id="panX" name="panX" value="0">
+        <input type="hidden" id="panY" name="panY" value="0">
+        
+        <div class="rotation-preview-wrap" style="padding: 15px;">
+          <div style="position:relative; display:inline-block; margin-bottom: 15px; cursor: move;" id="rotCanvasContainer">
+            <canvas id="rotPreviewCanvas" style="border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; box-shadow: 0 4px 15px rgba(0,0,0,0.5);"></canvas>
+          </div>
+          
+          <div class="d-flex align-items-center gap-3 mb-2" style="width: 100%; max-width: 300px; margin: 0 auto;">
+            <label class="text-sub" style="min-width: 60px; font-size: 0.85rem;">Rotate</label>
+            <input type="range" class="form-range" id="rotSlider" min="0" max="360" value="0" oninput="updateTransform()">
+            <span id="rotVal" class="text-main" style="min-width: 40px; font-size: 0.85rem;">0°</span>
+          </div>
+          
+          <div class="d-flex align-items-center gap-3" style="width: 100%; max-width: 300px; margin: 0 auto;">
+            <label class="text-sub" style="min-width: 60px; font-size: 0.85rem;">Zoom</label>
+            <input type="range" class="form-range" id="zoomSlider" min="0.1" max="5.0" step="0.1" value="1.0" oninput="updateTransform()">
+            <span id="zoomVal" class="text-main" style="min-width: 40px; font-size: 0.85rem;">1.0x</span>
+          </div>
+          
+          <div class="mt-3">
+             <button type="button" class="rot-btn" style="padding: 4px 12px; font-size: 0.8rem;" onclick="resetTransform()">Reset</button>
+          </div>
+          
+          <small class="text-sub mt-2 d-block">Drag the image to pan. Use sliders to rotate and zoom.</small>
+        </div>
       </div>
 
       <div class="form-check mb-2" id="colorModeWrap" style="display: none;">
@@ -213,53 +342,516 @@
     </div>
   </div>
 
+  <!-- ── Debug Monitor ────────────────────────── -->
+  <div id="debugPanel" class="p-3 mb-4" style="display:none;">
+    <!-- Toolbar -->
+    <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+      <h5 class="text-uppercase fw-bold mb-0" style="font-size:0.8rem;letter-spacing:0.1em;color:#7dffb3;">▸ Debug Monitor</h5>
+      <div class="d-flex gap-2 align-items-center flex-wrap">
+        <select id="debugBaud" class="form-select form-select-sm" style="width:110px; font-size:0.75rem; background:#111; color:#7dffb3; border-color:#1e3a2a;">
+          <option value="9600">9600</option>
+          <option value="57600">57600</option>
+          <option value="115200" selected>115200</option>
+          <option value="230400">230400</option>
+          <option value="460800">460800</option>
+        </select>
+        <label class="d-flex align-items-center gap-1" style="color:#4a6a58; font-size:0.75rem; cursor:pointer;">
+          <input type="checkbox" id="debugAutoScroll" checked> Auto-scroll
+        </label>
+        <button onclick="clearDebugTerminal()" class="rot-btn" style="font-size:0.72rem; padding:3px 9px; color:#4a6a58;">🗑 Clear</button>
+        <button onclick="disconnectSerial()" class="rot-btn" style="color:#f03c72;border-color:rgba(240,60,114,0.4);">✕ Disconnect</button>
+      </div>
+    </div>
+    <div class="row g-3">
+      <div class="col-md-7">
+        <div id="debugTerminal">Waiting for serial data...
+</div>
+      </div>
+      <div class="col-md-5 text-center">
+        <p style="color:#7dffb3;font-size:0.75rem;margin-bottom:6px;">Live Frame Preview</p>
+        <canvas id="debugCanvas" width="128" height="64"></canvas>
+        <div id="debugFrameInfo" style="color:#4a6a58;font-size:0.7rem;margin-top:4px;">Frame: — / —</div>
+        <div id="debugFps" style="color:#4a6a58;font-size:0.7rem;">FPS: —</div>
+      </div>
+    </div>
+  </div>
+
   <footer class="text-center text-sub small mt-4 pb-5">
     <p class="mb-1">Runs on <code>localhost</code> only — Web Serial requires a secure context.</p>
     <p class="mb-1">Standard OLED wiring: ESP32 GPIO21→SDA, GPIO22→SCL, 3V3→VCC, GND→GND</p>
     <p class="mb-3">ESP32-2432S028: flash directly over the board's USB port.</p>
-    <a href="/editor.html" class="text-decoration-none text-eye fw-bold">✦ Open Firmware Editor (edit Arduino code / compile)</a>
+    <div class="d-flex gap-3 justify-content-center flex-wrap">
+      <a href="/editor.html" class="text-decoration-none text-eye fw-bold"> Firmware Editor</a>
+    </div>
   </footer>
 </div>
 
+<!-- ── Boards Manager Modal ── -->
+<div id="boardsManagerModal" style="display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.55); z-index:9000; align-items:center; justify-content:center;">
+  <div style="width:660px; max-width:96vw; max-height:90vh; display:flex; flex-direction:column; background:var(--card-bg); backdrop-filter:blur(20px); border:1px solid var(--card-border); border-radius:20px; box-shadow:var(--card-shadow); overflow:hidden;">
+    <!-- Header -->
+    <div style="padding:20px 24px 16px; border-bottom:1px solid var(--card-border); flex-shrink:0;">
+      <div class="d-flex align-items-center justify-content-between">
+        <h5 class="mb-0 fw-bold text-main" style="letter-spacing:0.05em;">📦 BOARDS MANAGER</h5>
+        <button onclick="closeBoardsManager()" style="background:none; border:none; color:var(--text-sub); font-size:1.2rem; cursor:pointer;">✕</button>
+      </div>
+      <div class="d-flex gap-2 mt-3">
+        <input type="text" id="bmSearch" placeholder="Filter your search..." class="form-control" style="flex:1;" oninput="bmFilterSearch()" onkeydown="if(event.key==='Enter') bmSearchOnline()">
+        <select id="bmTypeFilter" class="form-select" style="width:120px;" onchange="bmFilterSearch()">
+          <option value="all">Type: All</option>
+          <option value="installed">Installed</option>
+          <option value="online">Online</option>
+        </select>
+        <button class="rot-btn" onclick="bmSearchOnline()" style="white-space:nowrap; padding:6px 14px;">🔍 Search</button>
+      </div>
+    </div>
+
+    <!-- Board List -->
+    <div id="bmList" style="flex:1; overflow-y:auto; padding:16px 24px;"></div>
+
+    <!-- Footer -->
+    <div style="padding:12px 24px; border-top:1px solid var(--card-border); flex-shrink:0; text-align:center;">
+      <small class="text-sub">Boards from PlatformIO registry. Installed boards are added to <code>platformio.ini</code>.</small>
+    </div>
+  </div>
+</div>
+
+<style>
+.bm-card {
+  background: rgba(255,255,255,0.5);
+  border: 1px solid var(--card-border);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 12px;
+  transition: box-shadow 0.2s;
+}
+.bm-card:hover { box-shadow: var(--card-hover-shadow); }
+.bm-card-name { font-weight: 700; color: var(--text-main); font-size: 1rem; }
+.bm-card-meta { color: var(--text-sub); font-size: 0.8rem; margin: 2px 0 6px; }
+.bm-card-desc { color: var(--text-sub); font-size: 0.83rem; margin-bottom: 10px; }
+.bm-badge-installed { 
+  display:inline-block; padding:2px 8px; border-radius:6px; 
+  font-size:0.72rem; font-weight:700;
+  background:rgba(45,187,235,0.15); color:var(--tie); margin-right:6px;
+}
+.bm-btn-install {
+  background: var(--tie); color: #fff; border: none;
+  padding: 6px 18px; border-radius: 8px; font-size:0.82rem; font-weight:600;
+  cursor: pointer; transition: background 0.2s;
+}
+.bm-btn-install:hover { background: #1aa8d4; }
+.bm-btn-remove {
+  background: rgba(240,60,114,0.12); color: #f03c72; border: 1px solid rgba(240,60,114,0.3);
+  padding: 6px 18px; border-radius: 8px; font-size:0.82rem; font-weight:600;
+  cursor: pointer; transition: background 0.2s;
+}
+.bm-btn-remove:hover { background: rgba(240,60,114,0.22); }
+.bm-modal {
+  display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+  background: rgba(0,0,0,0.55); z-index: 9000; align-items: center; justify-content: center;
+}
+.bm-modal-content {
+  width: 100%; max-height: 90vh; overflow-y: auto;
+  background: var(--card-bg); backdrop-filter: blur(20px);
+  border: 1px solid var(--card-border); border-radius: 20px;
+  box-shadow: var(--card-shadow); padding: 24px;
+}
+.bm-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 20px; border-bottom: 1px solid var(--card-border); padding-bottom: 16px;
+}
+.bm-close {
+  background: none; border: none; color: var(--text-sub);
+  font-size: 1.5rem; line-height: 1; cursor: pointer;
+}
+.bm-close:hover { color: var(--text-main); }
+</style>
+
+<!-- ── Custom Board Builder Modal ── -->
+<div class="bm-modal" id="customBoardModal">
+  <div class="bm-modal-content" style="max-width: 500px;">
+    <div class="bm-header">
+      <h3 class="m-0" style="font-size:1.15rem;">Custom Board Builder</h3>
+      <button class="bm-close" onclick="document.getElementById('customBoardModal').style.display='none'">&times;</button>
+    </div>
+    
+    <div class="mb-3" style="background:rgba(125,255,179,0.06); border:1px solid rgba(125,255,179,0.15); border-radius:10px; padding:12px;">
+      <label class="form-label text-sub fw-bold mb-1" style="font-size:0.8rem; color:#7dffb3;">⚡ Quick Presets</label>
+      <select id="cbPreset" class="form-select bg-dark text-eye border-secondary" style="font-size:0.83rem;" onchange="applyBoardPreset()">
+        <option value="">— Select a preset to auto-fill everything —</option>
+        <option value="esp32_st7789_19">ESP32 + 1.9" ST7789V (170×320 SPI)</option>
+        <option value="s3mini_st7789_19">ESP32-S3 Super Mini + 1.9" ST7789V (170×320 SPI)</option>
+        <option value="esp32_ssd1306">ESP32 + SSD1306 0.96" OLED (I2C)</option>
+        <option value="esp32_ili9341">ESP32 + ILI9341 2.8" TFT (SPI)</option>
+        <option value="s3mini_ssd1306">ESP32-S3 Super Mini + SSD1306 OLED (I2C)</option>
+      </select>
+    </div>
+
+    <div class="mb-3">
+      <label class="form-label text-sub fw-bold mb-1" style="font-size:0.85rem;">Profile Name</label>
+      <input type="text" id="cbName" class="form-control bg-dark text-eye border-secondary" placeholder="e.g. My ESP32-S3 Display">
+    </div>
+
+    <div class="mb-3">
+      <label class="form-label text-sub fw-bold mb-1" style="font-size:0.85rem;">Base Board (PlatformIO ID)</label>
+      <select id="cbBoardId" class="form-select bg-dark text-eye border-secondary" onchange="updateCbDefaultPins()">
+        <option value="esp32dev">ESP32 (Standard)</option>
+        <option value="esp32s2">ESP32-S2</option>
+        <option value="esp32s3box">ESP32-S3</option>
+        <option value="esp32-s3-devkitc-1">ESP32-S3 Super Mini</option>
+        <option value="esp32c3">ESP32-C3</option>
+        <option value="lolin32">Lolin32</option>
+      </select>
+    </div>
+
+    <div class="mb-3">
+      <label class="form-label text-sub fw-bold mb-1" style="font-size:0.85rem;">Display Driver</label>
+      <select id="cbDriver" class="form-select bg-dark text-eye border-secondary" onchange="updateCbPinsUI()">
+        <option value="SSD1306">SSD1306 (I2C, Black & White)</option>
+        <option value="SH1106">SH1106 (I2C, Black & White)</option>
+        <option value="ILI9341">ILI9341 (SPI, Color TFT)</option>
+        <option value="ST7789">ST7789 (SPI, Color TFT)</option>
+        <option value="U8G2_CUSTOM">Custom U8g2 Class (I2C/SPI)</option>
+      </select>
+    </div>
+
+    <div class="mb-3" id="cbCustomU8g2Container" style="display:none;">
+      <label class="form-label text-sub fw-bold mb-1" style="font-size:0.85rem;">U8g2 Constructor Class Name</label>
+      <input type="text" id="cbCustomU8g2" class="form-control bg-dark text-eye border-secondary" placeholder="e.g. U8G2_SSD1309_128X64_NONAME0_F_HW_I2C">
+      <small class="text-sub mt-1 d-block">Search the U8g2 documentation for the exact class name for your display.</small>
+    </div>
+
+    <div class="row mb-3">
+      <div class="col-6">
+        <label class="form-label text-sub fw-bold mb-1" style="font-size:0.85rem;">Width (px)</label>
+        <input type="number" id="cbWidth" class="form-control bg-dark text-eye border-secondary" value="128">
+      </div>
+      <div class="col-6">
+        <label class="form-label text-sub fw-bold mb-1" style="font-size:0.85rem;">Height (px)</label>
+        <input type="number" id="cbHeight" class="form-control bg-dark text-eye border-secondary" value="64">
+      </div>
+    </div>
+
+    <hr class="border-secondary my-4">
+    <h6 class="fw-bold mb-3" style="color:var(--text-main);">Pin Mapping</h6>
+
+    <!-- I2C Pins -->
+    <div id="cbI2CPins" class="row">
+      <div class="col-6 mb-2">
+        <label class="form-label text-sub mb-1" style="font-size:0.8rem;">SDA Pin</label>
+        <input type="number" id="cbSda" class="form-control bg-dark text-eye border-secondary" value="21">
+      </div>
+      <div class="col-6 mb-2">
+        <label class="form-label text-sub mb-1" style="font-size:0.8rem;">SCL Pin</label>
+        <input type="number" id="cbScl" class="form-control bg-dark text-eye border-secondary" value="22">
+      </div>
+    </div>
+
+    <!-- SPI Pins -->
+    <div id="cbSPIPins" class="row" style="display:none;">
+      <div class="col-6 mb-2">
+        <label class="form-label text-sub mb-1" style="font-size:0.8rem;">MOSI</label>
+        <input type="number" id="cbMosi" class="form-control bg-dark text-eye border-secondary" value="23">
+      </div>
+      <div class="col-6 mb-2">
+        <label class="form-label text-sub mb-1" style="font-size:0.8rem;">SCK (CLK)</label>
+        <input type="number" id="cbSck" class="form-control bg-dark text-eye border-secondary" value="18">
+      </div>
+      <div class="col-6 mb-2">
+        <label class="form-label text-sub mb-1" style="font-size:0.8rem;">CS (Chip Select)</label>
+        <input type="number" id="cbCs" class="form-control bg-dark text-eye border-secondary" value="15">
+      </div>
+      <div class="col-6 mb-2">
+        <label class="form-label text-sub mb-1" style="font-size:0.8rem;">DC (Data/Command)</label>
+        <input type="number" id="cbDc" class="form-control bg-dark text-eye border-secondary" value="2">
+      </div>
+      <div class="col-6 mb-2">
+        <label class="form-label text-sub mb-1" style="font-size:0.8rem;">RST (Reset)</label>
+        <input type="number" id="cbRst" class="form-control bg-dark text-eye border-secondary" placeholder="Optional (e.g. 4)">
+      </div>
+      <div class="col-6 mb-2">
+        <label class="form-label text-sub mb-1" style="font-size:0.8rem;">BL (Backlight)</label>
+        <input type="number" id="cbBl" class="form-control bg-dark text-eye border-secondary" placeholder="Optional (e.g. 21)">
+      </div>
+    </div>
+
+    <div class="mt-4" style="text-align:right;">
+      <button class="bm-btn-remove me-2" style="background:transparent; border:none; color:var(--text-sub);" onclick="document.getElementById('customBoardModal').style.display='none'">Cancel</button>
+      <button class="bm-btn-install" onclick="saveCustomBoard()">Save Board Config</button>
+    </div>
+  </div>
+</div>
+
 <script>
+// ── Constants & state ─────────────────────────────────
 const form = document.getElementById('convertForm');
 const statusEl = document.getElementById('status');
 const submitBtn = document.getElementById('submitBtn');
 const flashPanel = document.getElementById('flashPanel');
 const installBtn = document.getElementById('installBtn');
+
+// Automatically disconnect debug monitor if user clicks flash to avoid port conflicts
+installBtn.addEventListener('click', () => {
+  if (serialPort || serialReader) {
+    disconnectSerial();
+    console.log("Disconnected debug monitor for flashing.");
+  }
+});
 const displaySelect = document.getElementById('display');
 const colorModeWrap = document.getElementById('colorModeWrap');
-
 const sdCardWrap = document.getElementById('sdCardWrap');
 const colorModeCheckbox = document.getElementById('colorMode');
 const forSdCardCheckbox = document.getElementById('forSdCard');
 const sdCaution = document.getElementById('sdCaution');
+const healthBanner = document.getElementById('healthBanner');
+let environments = [];
+let currentRotation = 0;
+let previewImg = null;
 
-displaySelect.addEventListener('change', () => {
-  if (displaySelect.value === '2432s028') {
+// ── Health Check ───────────────────────────────────────
+async function checkHealth() {
+  try {
+    const res = await fetch('/api/health');
+    const h = await res.json();
+    const missing = [];
+    if (!h.ffmpeg) missing.push({ name: 'FFmpeg', url: 'https://ffmpeg.org/download.html' });
+    if (!h.pio)    missing.push({ name: 'PlatformIO CLI', url: 'https://docs.platformio.org/en/latest/core/installation/index.html' });
+    if (missing.length > 0) {
+      healthBanner.style.display = 'block';
+      healthBanner.className = 'alert alert-danger mb-3';
+      healthBanner.innerHTML = `
+        <strong>⚠️ Missing required dependencies:</strong>
+        ${missing.map(m => `<a href="${m.url}" target="_blank" class="ms-2 fw-bold">${m.name}</a>`).join('')}
+        <br><small class="text-muted">Install them and restart the server. Video conversion and firmware build will fail without them.</small>`;
+      submitBtn.disabled = true;
+    } else {
+      healthBanner.style.display = 'none';
+    }
+  } catch (_) {}
+}
+
+// ── Environments ───────────────────────────────────────
+async function loadEnvironments() {
+  try {
+    const res = await fetch('/api/firmware/envs');
+    environments = await res.json();
+    displaySelect.innerHTML = '';
+    environments.forEach(env => {
+      const option = document.createElement('option');
+      option.value = env.id;
+      option.textContent = env.label + ` (${env.width}x${env.height})`;
+      displaySelect.appendChild(option);
+    });
+    
+    const addOption = document.createElement('option');
+    addOption.value = 'ADD_CUSTOM';
+    addOption.textContent = '➕ Add Custom Board...';
+    displaySelect.appendChild(addOption);
+    
+    // Prevent overriding the selected value if it was set
+    const lastVal = displaySelect.getAttribute('data-last-val');
+    if (lastVal && environments.some(e => e.id === lastVal)) displaySelect.value = lastVal;
+
+    updateDisplayToggles();
+    renderRotPreview();
+  } catch (err) {
+    console.error('Failed to load environments:', err);
+  }
+}
+
+displaySelect.addEventListener('change', (e) => {
+  if (e.target.value === 'ADD_CUSTOM') {
+    // Reset to previous valid value so "Add Custom" doesn't stay selected
+    const lastVal = displaySelect.getAttribute('data-last-val');
+    if (lastVal && environments.some(e => e.id === lastVal)) e.target.value = lastVal;
+    else e.target.selectedIndex = 0;
+    
+    document.getElementById('customBoardModal').style.display = 'flex';
+  } else {
+    displaySelect.setAttribute('data-last-val', e.target.value);
+    updateDisplayToggles();
+    renderRotPreview();
+  }
+});
+
+function updateDisplayToggles() {
+  const selectedEnv = environments.find(e => e.id === displaySelect.value);
+
+  if (selectedEnv && selectedEnv.isColor) {
     colorModeWrap.style.display = 'flex';
-    if (colorModeCheckbox.checked) sdCardWrap.style.display = 'block';
+    if (colorModeCheckbox.checked && selectedEnv.hasSdCard) {
+        sdCardWrap.style.display = 'block';
+    } else {
+        sdCardWrap.style.display = 'none';
+    }
   } else {
     colorModeWrap.style.display = 'none';
     sdCardWrap.style.display = 'none';
   }
+}
+
+
+colorModeCheckbox.addEventListener('change', () => { 
+  const selectedEnv = environments.find(e => e.id === displaySelect.value);
+  sdCardWrap.style.display = (colorModeCheckbox.checked && selectedEnv?.hasSdCard) ? 'block' : 'none'; 
+});
+forSdCardCheckbox.addEventListener('change', () => { sdCaution.style.display = forSdCardCheckbox.checked ? 'block' : 'none'; });
+
+// ── Rotation Preview ─────────────────────────────────────
+const rotCanvas = document.getElementById('rotPreviewCanvas');
+const rotCtx = rotCanvas.getContext('2d');
+
+let currentZoom = 1.0;
+let currentPanX = 0;
+let currentPanY = 0;
+
+let isDragging = false;
+let startDragX = 0;
+let startDragY = 0;
+
+// Mouse events for panning
+rotCanvas.addEventListener('mousedown', (e) => {
+  isDragging = true;
+  startDragX = e.clientX;
+  startDragY = e.clientY;
+});
+window.addEventListener('mousemove', (e) => {
+  if (!isDragging) return;
+  const dx = e.clientX - startDragX;
+  const dy = e.clientY - startDragY;
+  startDragX = e.clientX;
+  startDragY = e.clientY;
+  
+  // The canvas might be scaled visually via CSS, so we need to adjust the dx/dy
+  const rect = rotCanvas.getBoundingClientRect();
+  const scaleX = rotCanvas.width / rect.width;
+  const scaleY = rotCanvas.height / rect.height;
+  
+  // Actually, wait, if the user drags the mouse, they expect the image to follow the mouse exactly.
+  // The image is inside the canvas which has internal coordinates.
+  currentPanX += dx * scaleX;
+  currentPanY += dy * scaleY;
+  
+  document.getElementById('panX').value = currentPanX;
+  document.getElementById('panY').value = currentPanY;
+  renderRotPreview();
+});
+window.addEventListener('mouseup', () => { isDragging = false; });
+
+function updateTransform() {
+  currentRotation = parseInt(document.getElementById('rotSlider').value) || 0;
+  currentZoom = parseFloat(document.getElementById('zoomSlider').value) || 1.0;
+  
+  document.getElementById('rotation').value = currentRotation;
+  document.getElementById('zoom').value = currentZoom;
+  document.getElementById('rotVal').textContent = currentRotation + '°';
+  document.getElementById('zoomVal').textContent = currentZoom.toFixed(1) + 'x';
+  renderRotPreview();
+}
+
+function resetTransform() {
+  document.getElementById('rotSlider').value = 0;
+  document.getElementById('zoomSlider').value = 1.0;
+  currentPanX = 0;
+  currentPanY = 0;
+  document.getElementById('panX').value = currentPanX;
+  document.getElementById('panY').value = currentPanY;
+  updateTransform();
+}
+
+function renderRotPreview() {
+  const envConf = environments.find(e => e.id === displaySelect.value);
+  const dispW = envConf ? envConf.width : 128;
+  const dispH = envConf ? envConf.height : 64;
+  
+  // Set the logical canvas size exactly to the display size
+  rotCanvas.width = dispW;
+  rotCanvas.height = dispH;
+  
+  // Keep the visual size reasonable
+  const maxDim = Math.max(dispW, dispH);
+  const scale = Math.min(300 / maxDim, 4); // up to 300px max bounds visually
+  rotCanvas.style.width = `${dispW * scale}px`;
+  rotCanvas.style.height = `${dispH * scale}px`;
+  
+  // Clear square background
+  rotCtx.fillStyle = '#000';
+  rotCtx.fillRect(0, 0, dispW, dispH);
+
+  if (previewImg) {
+    rotCtx.save();
+    // Move to center of display for transform origin
+    rotCtx.translate(dispW / 2, dispH / 2);
+    
+    // Apply transforms
+    rotCtx.translate(currentPanX, currentPanY);
+    rotCtx.rotate((currentRotation * Math.PI) / 180);
+    rotCtx.scale(currentZoom, currentZoom);
+    
+    // Draw the image centered
+    // We assume the previewImg should initially fill the display as best as possible
+    // Wait, FFmpeg's scale=dispW:dispH fits it automatically. 
+    // Let's just draw the original image size but scaled to fit exactly within dispW/dispH as a baseline.
+    const imgAspect = previewImg.width / previewImg.height;
+    const dispAspect = dispW / dispH;
+    
+    let drawW = dispW;
+    let drawH = dispH;
+    
+    if (imgAspect > dispAspect) {
+      // Image is wider than display
+      drawH = dispW / imgAspect;
+    } else {
+      drawW = dispH * imgAspect;
+    }
+    
+    rotCtx.drawImage(previewImg, -drawW / 2, -drawH / 2, drawW, drawH);
+    rotCtx.restore();
+  } else {
+    rotCtx.strokeStyle = 'rgba(45,187,235,0.3)';
+    rotCtx.save();
+    rotCtx.translate(dispW / 2, dispH / 2);
+    for (let x = -dispW/2; x < dispW/2; x += 16) { rotCtx.beginPath(); rotCtx.moveTo(x, -dispH/2); rotCtx.lineTo(x, dispH/2); rotCtx.stroke(); }
+    for (let y = -dispH/2; y < dispH/2; y += 16) { rotCtx.beginPath(); rotCtx.moveTo(-dispW/2, y); rotCtx.lineTo(dispW/2, y); rotCtx.stroke(); }
+    rotCtx.fillStyle = 'rgba(45,187,235,0.7)';
+    rotCtx.font = `${Math.max(8, Math.min(14, dispW / 10))}px monospace`;
+    rotCtx.textAlign = 'center';
+    rotCtx.fillText(`${dispW}×${dispH}`, 0, 4);
+    rotCtx.restore();
+  }
+}
+
+document.getElementById('videoFile').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  if (file.type.startsWith('video/')) {
+    const url = URL.createObjectURL(file);
+    const vid = document.createElement('video');
+    vid.src = url; vid.muted = true; vid.preload = 'auto';
+    vid.addEventListener('loadeddata', () => { vid.currentTime = Math.min(1, (vid.duration || 2) / 4); });
+    vid.addEventListener('seeked', () => {
+      const tmpCv = document.createElement('canvas');
+      tmpCv.width = vid.videoWidth; tmpCv.height = vid.videoHeight;
+      tmpCv.getContext('2d').drawImage(vid, 0, 0);
+      const img = new Image(); img.src = tmpCv.toDataURL();
+      img.onload = () => { previewImg = img; renderRotPreview(); };
+      URL.revokeObjectURL(url);
+    });
+    vid.load();
+  } else if (file.type.startsWith('image/')) {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const img = new Image(); img.src = ev.target.result;
+      img.onload = () => { previewImg = img; renderRotPreview(); };
+    };
+    reader.readAsDataURL(file);
+  }
 });
 
-colorModeCheckbox.addEventListener('change', () => {
-  sdCardWrap.style.display = colorModeCheckbox.checked ? 'block' : 'none';
-});
-
-forSdCardCheckbox.addEventListener('change', () => {
-  sdCaution.style.display = forSdCardCheckbox.checked ? 'block' : 'none';
-});
-
+// ── Form Submit & Polling ─────────────────────────────────
 const STAGE_LABEL = {
-  queued: 'Queued...',
-  extracting: 'Extracting frames from video...',
-  packing: 'Encoding frames...',
-  building: 'Compiling firmware...',
-  done: 'Done — ready to flash',
-  error: 'An error occurred',
+  queued: 'Queued...', extracting: 'Extracting frames from video...', packing: 'Encoding frames...',
+  building: 'Compiling firmware...', done: 'Done — ready to flash', error: 'An error occurred',
 };
 
 form.addEventListener('submit', async (e) => {
@@ -268,13 +860,11 @@ form.addEventListener('submit', async (e) => {
   flashPanel.style.display = 'none';
   statusEl.className = 'mt-3 text-sub fw-medium';
   setStatus('Uploading...');
-
   try {
     const fd = new FormData(form);
     const res = await fetch('/api/jobs/convert', { method: 'POST', body: fd });
     const body = await res.json();
     if (!res.ok) throw new Error(body.error || 'Upload failed');
-
     await pollJob(body.jobId);
   } catch (err) {
     statusEl.className = 'mt-3 text-eye fw-medium';
@@ -287,24 +877,21 @@ async function pollJob(jobId) {
   while (true) {
     const res = await fetch(`/api/jobs/${jobId}`);
     const job = await res.json();
-
     if (job.status === 'error') {
       statusEl.className = 'mt-3 text-eye fw-medium';
       setStatus(job.error || 'An error occurred during processing');
       submitBtn.disabled = false;
       return;
     }
-
     setStatus(job.progress || STAGE_LABEL[job.status] || job.status);
-
     if (job.status === 'done') {
       submitBtn.disabled = false;
       installBtn.manifest = `/api/jobs/${jobId}/manifest.json`;
       flashPanel.style.display = 'block';
-      
       const sdCardSection = document.getElementById('sdCardSection');
       const downloadBtn = document.getElementById('downloadBtn');
-      if (displaySelect.value === '2432s028') {
+      const selectedEnv = environments.find(e => e.id === displaySelect.value);
+      if (selectedEnv && selectedEnv.isColor) {
         sdCardSection.style.display = 'block';
         downloadBtn.href = `/api/jobs/${jobId}/files/video.dat`;
       } else {
@@ -312,7 +899,6 @@ async function pollJob(jobId) {
       }
       return;
     }
-
     await new Promise((r) => setTimeout(r, 1500));
   }
 }
@@ -320,6 +906,563 @@ async function pollJob(jobId) {
 function setStatus(text) {
   statusEl.innerHTML = `<div class="spinner-border spinner-border-sm text-tie me-2" role="status"></div>${text}`;
 }
+
+// ── Debug Monitor (Web Serial) ────────────────────────────
+let serialPort = null, serialReader = null;
+let _lastFrameTime = 0, _fpsFilter = 0;
+
+async function openDebugMonitor() {
+  if (!('serial' in navigator)) {
+    alert('Web Serial is not supported. Please use Chrome or Edge on localhost.');
+    return;
+  }
+  try {
+    serialPort = await navigator.serial.requestPort();
+    const baud = parseInt(document.getElementById('debugBaud')?.value || '115200', 10);
+    await serialPort.open({ baudRate: baud });
+    document.getElementById('debugPanel').style.display = 'block';
+    document.getElementById('debugPanel').scrollIntoView({ behavior: 'smooth' });
+    clearDebugTerminal();
+    readSerial();
+  } catch (e) {
+    if (e.name !== 'AbortError') alert('Failed to open serial port: ' + e.message);
+  }
+}
+
+function clearDebugTerminal() {
+  const t = document.getElementById('debugTerminal');
+  if (t) t.innerHTML = '';
+}
+
+function appendDebugLine(text) {
+  const terminal = document.getElementById('debugTerminal');
+  const autoScroll = document.getElementById('debugAutoScroll')?.checked !== false;
+  const span = document.createElement('span');
+
+  // Color-code by content
+  const lower = text.toLowerCase();
+  if (lower.includes('error') || lower.includes('err:') || lower.includes('fail')) {
+    span.style.color = '#f07070';
+  } else if (lower.includes('warn') || lower.includes('warning')) {
+    span.style.color = '#f0c060';
+  } else if (lower.startsWith('frame:') || lower.startsWith('frame_data:')) {
+    span.style.color = '#7dffb3';
+  } else if (lower.includes('ok') || lower.includes('done') || lower.includes('success')) {
+    span.style.color = '#a0e0ff';
+  } else {
+    span.style.color = '#c0ccd8';
+  }
+
+  span.textContent = text + '\n';
+  terminal.appendChild(span);
+  if (autoScroll) terminal.scrollTop = terminal.scrollHeight;
+
+  // Limit to 500 lines to prevent memory bloat
+  while (terminal.children.length > 500) terminal.removeChild(terminal.firstChild);
+}
+
+async function readSerial() {
+  const decoder = new TextDecoderStream();
+  serialPort.readable.pipeTo(decoder.writable);
+  serialReader = decoder.readable.getReader();
+  let buf = '';
+  try {
+    while (true) {
+      const { value, done } = await serialReader.read();
+      if (done) break;
+      buf += value;
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        appendDebugLine(trimmed);
+
+        // Parse FRAME:current/total for frame counter
+        const mFrame = trimmed.match(/FRAME:(\d+)\/(\d+)/i);
+        if (mFrame) updateDebugFrame(parseInt(mFrame[1]), parseInt(mFrame[2]), null);
+
+        // Parse FRAME_DATA:hexstring for pixel rendering
+        // Expected format from firmware: FRAME_DATA:<hex bytes representing 1-bit bitmap>
+        const mData = trimmed.match(/FRAME_DATA:([0-9a-fA-F]+)/i);
+        if (mData) renderFrameData(mData[1]);
+      }
+    }
+  } catch (e) {
+    appendDebugLine(`[disconnected: ${e.message}]`);
+  }
+}
+
+async function disconnectSerial() {
+  try {
+    if (serialReader) { await serialReader.cancel(); serialReader = null; }
+    if (serialPort)   { await serialPort.close();    serialPort = null;   }
+  } catch (_) {}
+  document.getElementById('debugPanel').style.display = 'none';
+}
+
+function updateDebugFrame(frameIdx, totalFrames, bitmap) {
+  document.getElementById('debugFrameInfo').textContent = `Frame: ${frameIdx} / ${totalFrames}`;
+
+  // FPS counter
+  const now = performance.now();
+  if (_lastFrameTime > 0) {
+    const rawFps = 1000 / (now - _lastFrameTime);
+    _fpsFilter = _fpsFilter * 0.7 + rawFps * 0.3; // exponential smoothing
+    document.getElementById('debugFps').textContent = `FPS: ${_fpsFilter.toFixed(1)}`;
+  }
+  _lastFrameTime = now;
+
+  // If no bitmap, just show a counter
+  if (!bitmap) {
+    const canvas = document.getElementById('debugCanvas');
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#0a0e14';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#7dffb3';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(`Frame ${frameIdx}/${totalFrames}`, canvas.width / 2, canvas.height / 2 + 4);
+  }
+}
+
+function renderFrameData(hex) {
+  const canvas = document.getElementById('debugCanvas');
+  const w = canvas.width, h = canvas.height;
+  const ctx = canvas.getContext('2d');
+  const imgData = ctx.createImageData(w, h);
+  const bytes = new Uint8Array(hex.match(/.{1,2}/g).map(b => parseInt(b, 16)));
+
+  // 1-bit packed bitmap: MSB first, row by row
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const bitIdx = y * w + x;
+      const byteVal = bytes[Math.floor(bitIdx / 8)] || 0;
+      const bit = (byteVal >> (7 - (bitIdx % 8))) & 1;
+      const i = (y * w + x) * 4;
+      imgData.data[i]     = bit ? 255 : 10;   // R
+      imgData.data[i + 1] = bit ? 255 : 14;   // G
+      imgData.data[i + 2] = bit ? 255 : 20;   // B
+      imgData.data[i + 3] = 255;              // A
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+}
+
+// ── Init ───────────────────────────────────────────────────
+checkHealth();
+loadEnvironments();
+
+// ── Boards Manager ─────────────────────────────────────────
+// Stores result sets for filtering
+let bmInstalledData = [];
+let bmOnlineData    = [];
+
+// Known ESP32 USB chip vendor/product IDs for friendly name display
+const USB_CHIP_NAMES = {
+  '0x10c4': 'Silicon Labs CP210x (ESP32)',  // CP2102/CP2109
+  '0x1a86': 'CH340 USB-Serial (ESP32)',      // CH340
+  '0x0403': 'FTDI FT232 (ESP32)',            // FT232
+  '0x303a': 'Espressif ESP32-S3/C3/H2 (native USB)',
+  '0x239a': 'Adafruit ESP32',
+};
+
+async function detectBoard() {
+  if (!('serial' in navigator)) {
+    alert('Web Serial is not supported. Please use Chrome or Edge.');
+    return;
+  }
+  try {
+    const port = await navigator.serial.requestPort();
+    const info = port.getInfo();
+    const vid  = `0x${(info.usbVendorId || 0).toString(16).toLowerCase().padStart(4,'0')}`;
+    const name = USB_CHIP_NAMES[vid] || `Unknown USB chip (VID: ${vid})`;
+    const el = document.getElementById('detectedBoardInfo');
+    el.textContent = `✓ Detected: ${name}`;
+    el.style.display = 'block';
+    el.style.color = '#2dbbeb';
+  } catch (e) {
+    if (e.name !== 'AbortError') alert('Detection failed: ' + e.message);
+  }
+}
+
+async function openBoardsManager() {
+  document.getElementById('boardsManagerModal').style.display = 'flex';
+  document.getElementById('bmSearch').value = '';
+  document.getElementById('bmTypeFilter').value = 'all';
+  await bmRenderInstalled();
+}
+
+function closeBoardsManager() {
+  document.getElementById('boardsManagerModal').style.display = 'none';
+}
+
+async function bmRenderInstalled() {
+  const list = document.getElementById('bmList');
+  list.innerHTML = '<div class="text-sub" style="padding:16px 0;">Loading installed boards...</div>';
+  try {
+    const res = await fetch('/api/boards/installed');
+    bmInstalledData = await res.json();
+    bmRender(bmInstalledData, []);
+  } catch(e) {
+    list.innerHTML = `<div style="color:#f03c72;">Error: ${e.message}</div>`;
+  }
+}
+
+function bmRender(installed, online) {
+  const list = document.getElementById('bmList');
+  const q    = document.getElementById('bmSearch').value.toLowerCase();
+  const type = document.getElementById('bmTypeFilter').value;
+  list.innerHTML = '';
+
+  const builtinCategories = {
+    'SSD1306 / SH1106 OLED (I2C)': ['esp32-oled096', 'esp32-oled130'],
+    'ILI9341 TFT (SPI, CYD)':       ['esp32-ili9341'],
+    'ST7789V TFT (SPI)':            ['esp32-st7789-19', 'esp32s3mini-st7789-19']
+  };
+
+  // --- Section: Built-in Boards ---
+  if (type !== 'online') {
+    let hasBuiltin = false;
+    for (const [catName, ids] of Object.entries(builtinCategories)) {
+      const envs = installed.filter(e => ids.includes(e.id) && (!q || e.id.includes(q) || catName.toLowerCase().includes(q)));
+      if (!envs.length) continue;
+      hasBuiltin = true;
+      const header = document.createElement('div');
+      header.style.cssText = 'font-size:0.75rem; font-weight:700; color:var(--text-sub); text-transform:uppercase; letter-spacing:0.1em; margin:8px 0 6px;';
+      header.textContent = catName;
+      list.appendChild(header);
+      for (const env of envs) {
+        list.appendChild(bmCard(env, true, false));
+      }
+    }
+  }
+
+  // --- Section: Installed Custom Boards ---
+  if (type !== 'online') {
+    const custom = installed.filter(e => e.isCustom && (!q || e.id.includes(q) || (e.libDeps || []).join(' ').toLowerCase().includes(q)));
+    if (custom.length) {
+      const header = document.createElement('div');
+      header.style.cssText = 'font-size:0.75rem; font-weight:700; color:var(--text-sub); text-transform:uppercase; letter-spacing:0.1em; margin:14px 0 6px;';
+      header.textContent = 'Custom Installed Boards';
+      list.appendChild(header);
+      for (const env of custom) {
+        list.appendChild(bmCard(env, true, true));
+      }
+    }
+  }
+
+  // --- Section: Online Search Results ---
+  if (type !== 'installed' && online.length) {
+    const header = document.createElement('div');
+    header.style.cssText = 'font-size:0.75rem; font-weight:700; color:var(--text-sub); text-transform:uppercase; letter-spacing:0.1em; margin:14px 0 6px;';
+    header.textContent = 'Online — PlatformIO Registry';
+    list.appendChild(header);
+    for (const lib of online) {
+      // Online results are already filtered server-side — show all of them
+      list.appendChild(bmOnlineCard(lib, installed));
+    }
+  }
+
+  if (!list.firstChild) {
+    const q2 = document.getElementById('bmSearch').value.trim();
+    list.innerHTML = q2
+      ? '<div class="text-sub" style="padding:20px 0; text-align:center;">Press <strong>🔍 Search</strong> to look up libraries online for "<em>' + q2 + '</em>".</div>'
+      : '<div class="text-sub" style="padding:20px 0; text-align:center;">No results. Try searching online!</div>';
+  }
+}
+
+function bmCard(env, installed, isCustom) {
+  const d = document.createElement('div');
+  d.className = 'bm-card';
+  const libStr = (env.libDeps || []).join(', ') || '(built-in)';
+  d.innerHTML = `
+    <div class="d-flex justify-content-between align-items-start">
+      <div>
+        <div class="bm-card-name">${env.id}</div>
+        <div class="bm-card-meta">Board: <code>${env.board}</code> · ${env.width}×${env.height}${env.isColor ? ' · Color' : ' · B&W'}</div>
+        <div class="bm-card-desc">Libraries: <code>${libStr}</code></div>
+        <span class="bm-badge-installed">✓ installed</span>
+      </div>
+      <div>
+        ${isCustom ? `<button class="bm-btn-remove" onclick="bmRemove('${env.id}')">REMOVE</button>` : ''}
+      </div>
+    </div>`;
+  return d;
+}
+
+function bmOnlineCard(lib, installed) {
+  const alreadyInstalled = installed.some(e => (e.libDeps || []).some(d => d.includes(lib.name)));
+  const d = document.createElement('div');
+  d.className = 'bm-card';
+  d.innerHTML = `
+    <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+      <div style="flex:1;">
+        <div class="bm-card-name">${lib.name}</div>
+        <div class="bm-card-meta">v${lib.version} · by <strong>${lib.owner || 'unknown'}</strong> · <a href="${lib.url}" target="_blank" style="color:var(--tie);">More info</a></div>
+        <div class="bm-card-desc">${lib.description}</div>
+        ${alreadyInstalled ? '<span class="bm-badge-installed">✓ installed</span>' : ''}
+      </div>
+      <div class="d-flex flex-column gap-2 align-items-end" style="min-width:110px;">
+        <select id="bmVer_${lib.name.replace(/[^a-z0-9]/gi,'_')}" class="form-select form-select-sm" style="font-size:0.78rem; min-width:100px;">
+          <option value="${lib.version}">${lib.version}</option>
+        </select>
+        ${!alreadyInstalled ? `<button class="bm-btn-install" onclick="bmInstall('${lib.name}', '${lib.lib_deps}', '${lib.version}')">INSTALL</button>` : ''}
+      </div>
+    </div>`;
+  return d;
+}
+
+async function bmSearchOnline() {
+  const q = document.getElementById('bmSearch').value.trim();
+  const list = document.getElementById('bmList');
+  if (!q) { bmRender(bmInstalledData, []); return; }
+  list.innerHTML = '<div class="text-sub" style="padding:20px 0; text-align:center;">Searching PlatformIO registry...</div>';
+  try {
+    const res = await fetch(`/api/boards/search?q=${encodeURIComponent(q)}`);
+    const data = await res.json();
+    bmOnlineData = data.libs || [];
+    document.getElementById('bmTypeFilter').value = 'online';
+    bmRender(bmInstalledData, bmOnlineData);
+  } catch(e) {
+    list.innerHTML = `<div style="color:#f03c72;">Search error: ${e.message}</div>`;
+  }
+}
+
+function bmFilterSearch() {
+  bmRender(bmInstalledData, bmOnlineData);
+}
+
+async function bmInstall(libName, libDeps, version) {
+  const boardId = prompt(`Enter the PlatformIO board ID to use with "${libName}":\n(e.g. esp32dev, esp32s3box, lolin32)`, 'esp32dev');
+  if (!boardId) return;
+  try {
+    const res = await fetch('/api/boards/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        envName: `custom-${boardId}`,
+        boardId, 
+        libDeps: [libDeps || libName], 
+        buildFlags: ['-D CUSTOM_BOARD_PINS=1'] 
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    await bmRenderInstalled();
+    loadEnvironments();
+    alert(`✓ Installed ${libName} as [env:custom-${boardId}]`);
+  } catch(e) {
+    alert('Install failed: ' + e.message);
+  }
+}
+
+async function bmRemove(envName) {
+  if (!confirm(`Remove [env:${envName}] from platformio.ini?`)) return;
+  try {
+    const res = await fetch('/api/boards/remove', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ envName })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    await bmRenderInstalled();
+    loadEnvironments();
+  } catch(e) {
+    alert('Remove failed: ' + e.message);
+  }
+}
+
+// ── Custom Board Builder Logic ─────────────────────────────
+const BOARD_PIN_DEFAULTS = {
+  esp32dev:   { sda: 21, scl: 22, mosi: 23, sck: 18, cs: 15, dc: 2, rst: 4 },
+  esp32s2:    { sda: 8,  scl: 9,  mosi: 11, sck: 12, cs: 10, dc: 14, rst: 15 },
+  esp32s3box: { sda: 8,  scl: 9,  mosi: 11, sck: 12, cs: 10, dc: 4,  rst: 5 },
+  'esp32-s3-devkitc-1': { sda: 8, scl: 9, mosi: 11, sck: 12, cs: 10, dc: 4, rst: 5 },
+  esp32c3:    { sda: 8,  scl: 9,  mosi: 6,  sck: 4,  cs: 7,  dc: 2,  rst: 3 },
+  lolin32:    { sda: 21, scl: 22, mosi: 23, sck: 18, cs: 15, dc: 2,  rst: 4 }
+};
+
+// Full board+display presets — fills every field in one shot
+const BOARD_PRESETS = {
+  esp32_st7789_19: {
+    name: 'ESP32_ST7789_19inch',
+    boardId: 'esp32dev',
+    driver: 'ST7789',
+    width: 170, height: 320,
+    mosi: 23, sck: 18, cs: 15, dc: 2, rst: 4, bl: 5,
+    sda: 21, scl: 22
+  },
+  s3mini_st7789_19: {
+    name: 'S3Mini_ST7789_19inch',
+    boardId: 'esp32-s3-devkitc-1',
+    driver: 'ST7789',
+    width: 170, height: 320,
+    mosi: 11, sck: 12, cs: 10, dc: 4, rst: 5, bl: 6,
+    sda: 8, scl: 9
+  },
+  esp32_ssd1306: {
+    name: 'ESP32_SSD1306_OLED',
+    boardId: 'esp32dev',
+    driver: 'SSD1306',
+    width: 128, height: 64,
+    sda: 21, scl: 22,
+    mosi: 23, sck: 18, cs: 15, dc: 2, rst: 4, bl: ''
+  },
+  esp32_ili9341: {
+    name: 'ESP32_ILI9341_TFT',
+    boardId: 'esp32dev',
+    driver: 'ILI9341',
+    width: 320, height: 240,
+    mosi: 23, sck: 18, cs: 15, dc: 2, rst: 4, bl: 5,
+    sda: 21, scl: 22
+  },
+  s3mini_ssd1306: {
+    name: 'S3Mini_SSD1306_OLED',
+    boardId: 'esp32-s3-devkitc-1',
+    driver: 'SSD1306',
+    width: 128, height: 64,
+    sda: 8, scl: 9,
+    mosi: 11, sck: 12, cs: 10, dc: 4, rst: 5, bl: ''
+  }
+};
+
+function applyBoardPreset() {
+  const key = document.getElementById('cbPreset').value;
+  if (!key) return;
+  const p = BOARD_PRESETS[key];
+  if (!p) return;
+
+  document.getElementById('cbName').value   = p.name;
+  document.getElementById('cbWidth').value  = p.width;
+  document.getElementById('cbHeight').value = p.height;
+
+  document.getElementById('cbBoardId').value = p.boardId;
+  document.getElementById('cbDriver').value  = p.driver;
+
+  document.getElementById('cbSda').value  = p.sda  ?? '';
+  document.getElementById('cbScl').value  = p.scl  ?? '';
+  document.getElementById('cbMosi').value = p.mosi ?? '';
+  document.getElementById('cbSck').value  = p.sck  ?? '';
+  document.getElementById('cbCs').value   = p.cs   ?? '';
+  document.getElementById('cbDc').value   = p.dc   ?? '';
+  document.getElementById('cbRst').value  = p.rst  ?? '';
+  const blEl = document.getElementById('cbBl');
+  if (blEl) blEl.value = p.bl ?? '';
+
+  updateCbPinsUI();
+}
+
+function updateCbDefaultPins() {
+  const b = document.getElementById('cbBoardId').value;
+  const defaults = BOARD_PIN_DEFAULTS[b] || BOARD_PIN_DEFAULTS.esp32dev;
+  
+  document.getElementById('cbSda').value = defaults.sda;
+  document.getElementById('cbScl').value = defaults.scl;
+  document.getElementById('cbMosi').value = defaults.mosi;
+  document.getElementById('cbSck').value = defaults.sck;
+  document.getElementById('cbCs').value = defaults.cs;
+  document.getElementById('cbDc').value = defaults.dc;
+  document.getElementById('cbRst').value = defaults.rst;
+}
+
+function updateCbPinsUI() {
+  const driver = document.getElementById('cbDriver').value;
+  const isSPI = driver === 'ILI9341' || driver === 'ST7789';
+  const isCustom = driver === 'U8G2_CUSTOM';
+  
+  document.getElementById('cbI2CPins').style.display = isSPI && !isCustom ? 'none' : 'flex';
+  document.getElementById('cbSPIPins').style.display = isSPI || isCustom ? 'flex' : 'none';
+  document.getElementById('cbCustomU8g2Container').style.display = isCustom ? 'block' : 'none';
+}
+
+async function saveCustomBoard() {
+  const name = document.getElementById('cbName').value.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+  const boardId = document.getElementById('cbBoardId').value;
+  const driver = document.getElementById('cbDriver').value;
+  const customU8g2 = document.getElementById('cbCustomU8g2').value.trim();
+  const w = document.getElementById('cbWidth').value;
+  const h = document.getElementById('cbHeight').value;
+  
+  if (!name) return alert('Please enter a Profile Name (e.g. MyDisplay)');
+  
+  const envName = `custom-${name}`;
+  
+  let buildFlags = [
+    `-DDISPLAY_W=${w}`,
+    `-DDISPLAY_H=${h}`,
+  ];
+  let libDeps = [];
+
+  const isSPI = driver === 'ILI9341' || driver === 'ST7789';
+  const isCustomU8g2 = driver === 'U8G2_CUSTOM';
+
+  if (isCustomU8g2) {
+    if (!customU8g2) return alert('Please enter a U8g2 class name (e.g. U8G2_SSD1309_128X64_NONAME0_F_HW_I2C).');
+    libDeps.push('olikraus/U8g2@^2.35.19');
+    buildFlags.push(`-DDISPLAY_DRIVER_U8G2_CUSTOM=1`);
+    buildFlags.push(`-DU8G2_CLASS=${customU8g2}`);
+    // Include both I2C and SPI pins so the user can use whichever they need
+    buildFlags.push(`-DI2C_SDA=${document.getElementById('cbSda').value}`);
+    buildFlags.push(`-DI2C_SCL=${document.getElementById('cbScl').value}`);
+    buildFlags.push(`-DSPI_MOSI=${document.getElementById('cbMosi').value}`);
+    buildFlags.push(`-DSPI_SCK=${document.getElementById('cbSck').value}`);
+    buildFlags.push(`-DSPI_CS=${document.getElementById('cbCs').value}`);
+    buildFlags.push(`-DSPI_DC=${document.getElementById('cbDc').value}`);
+    buildFlags.push(`-DSPI_RST=${document.getElementById('cbRst').value || '-1'}`);
+  } else if (!isSPI) {
+    libDeps.push('olikraus/U8g2@^2.35.19');
+    buildFlags.push(`-DDISPLAY_DRIVER_${driver}=1`);
+    buildFlags.push(`-DI2C_SDA=${document.getElementById('cbSda').value}`);
+    buildFlags.push(`-DI2C_SCL=${document.getElementById('cbScl').value}`);
+  } else {
+    libDeps.push('Bodmer/TFT_eSPI@^2.5.43');
+    buildFlags.push(`-DDISPLAY_DRIVER_TFT=1`);
+    buildFlags.push(`-DUSER_SETUP_LOADED=1`);
+    buildFlags.push(`-D${driver}_DRIVER=1`);
+    buildFlags.push(`-DTFT_MOSI=${document.getElementById('cbMosi').value}`);
+    buildFlags.push(`-DTFT_SCLK=${document.getElementById('cbSck').value}`);
+    buildFlags.push(`-DTFT_CS=${document.getElementById('cbCs').value}`);
+    buildFlags.push(`-DTFT_DC=${document.getElementById('cbDc').value}`);
+    
+    const rst = document.getElementById('cbRst').value;
+    buildFlags.push(`-DTFT_RST=${rst ? rst : '-1'}`);
+    
+    const bl = document.getElementById('cbBl').value;
+    if (bl) buildFlags.push(`-DTFT_BL=${bl}`);
+    
+    // Optional optimizations for ESP32
+    if (boardId.includes('esp32')) {
+      buildFlags.push('-DUSE_HSPI_PORT=1');
+      buildFlags.push('-DSPI_FREQUENCY=40000000');
+    }
+  }
+
+  try {
+    const res = await fetch('/api/boards/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ envName, boardId, libDeps, buildFlags })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    
+    document.getElementById('customBoardModal').style.display = 'none';
+    await loadEnvironments();
+    displaySelect.value = data.envName;
+    updateDisplayToggles();
+    renderRotPreview();
+    alert(`Successfully created custom board: ${name}!`);
+  } catch(e) {
+    alert('Failed to save custom board: ' + e.message);
+  }
+}
+
+// Close modal on backdrop click (also for custom board modal)
+document.getElementById('customBoardModal').addEventListener('click', (e) => {
+  if (e.target === document.getElementById('customBoardModal')) document.getElementById('customBoardModal').style.display = 'none';
+});
 </script>
 </body>
 </html>

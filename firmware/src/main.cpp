@@ -6,10 +6,12 @@
 #include <SPIFFS.h>
 
 // ── Display driver selection ──────────────────────────────────────────────────
-#if defined(DISPLAY_DRIVER_ILI9341)
+#if defined(DISPLAY_DRIVER_TFT) || defined(DISPLAY_DRIVER_ILI9341) || defined(DISPLAY_DRIVER_ST7789)
   #include <TFT_eSPI.h>
-  #include <SD.h>
   #include <SPI.h>
+  #ifdef HAS_SD_CARD
+    #include <SD.h>
+  #endif
   static TFT_eSPI tft;
 
 
@@ -23,8 +25,25 @@
   #include <Wire.h>
   static U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 
+#elif defined(DISPLAY_DRIVER_U8G2_CUSTOM)
+  // Custom U8g2 class — user supplies the class name via U8G2_CLASS build flag
+  // e.g. -DU8G2_CLASS=U8G2_SSD1309_128X64_NONAME0_F_HW_I2C
+  #include <U8g2lib.h>
+  #include <Wire.h>
+  #ifndef U8G2_CLASS
+    #error "U8G2_CLASS must be defined when using DISPLAY_DRIVER_U8G2_CUSTOM"
+  #endif
+  static U8G2_CLASS u8g2(U8G2_R0, U8X8_PIN_NONE);
+
 #else
-  #error "Define DISPLAY_DRIVER_SSD1306, DISPLAY_DRIVER_SH1106, or DISPLAY_DRIVER_ILI9341"
+  #error "Define DISPLAY_DRIVER_SSD1306, DISPLAY_DRIVER_SH1106, DISPLAY_DRIVER_U8G2_CUSTOM, or DISPLAY_DRIVER_TFT"
+#endif
+
+#ifndef I2C_SDA
+  #define I2C_SDA 21
+#endif
+#ifndef I2C_SCL
+  #define I2C_SCL 22
 #endif
 
 // ── Frame geometry ────────────────────────────────────────────────────────────
@@ -121,7 +140,7 @@ static bool readAndRenderColorFrame() {
     return true; // Skip invalid frames
   }
 
-#if defined(DISPLAY_DRIVER_ILI9341)
+#if defined(DISPLAY_DRIVER_TFT) || defined(DISPLAY_DRIVER_ILI9341) || defined(DISPLAY_DRIVER_ST7789)
   uint8_t scale = DISPLAY_W / frameW;
 
   tft.startWrite();
@@ -184,7 +203,7 @@ static bool readAndRenderColorFrame() {
 
 // ── Render frameBuf to display (for 1-bit mode) ───────────────────────────────
 static void renderFrame1Bit() {
-#if defined(DISPLAY_DRIVER_ILI9341)
+#if defined(DISPLAY_DRIVER_TFT) || defined(DISPLAY_DRIVER_ILI9341) || defined(DISPLAY_DRIVER_ST7789)
   static uint16_t lineBuf[FRAME_W];
   tft.startWrite();
   tft.setAddrWindow(0, 0, FRAME_W, FRAME_H);
@@ -208,7 +227,7 @@ static void renderFrame1Bit() {
 void setup() {
   Serial.begin(115200);
 
-#if defined(DISPLAY_DRIVER_ILI9341)
+#if defined(DISPLAY_DRIVER_TFT) || defined(DISPLAY_DRIVER_ILI9341) || defined(DISPLAY_DRIVER_ST7789)
   tft.init();
   tft.setRotation(1);        // landscape 320x240
   tft.fillScreen(TFT_BLACK);
@@ -217,14 +236,14 @@ void setup() {
     digitalWrite(TFT_BL, HIGH); // backlight on
   #endif
 #else
-  Wire.begin(21, 22);        // SDA, SCL — change pins if your board uses different ones
+  Wire.begin(I2C_SDA, I2C_SCL);
   u8g2.begin();
   u8g2.setBusClock(400000);
 #endif
 
   bool videoOpened = false;
 
-#if defined(DISPLAY_DRIVER_ILI9341)
+#ifdef HAS_SD_CARD
   // The CYD board has a MicroSD card slot. Try to mount it first!
   // CYD standard SD pins: CS=5, SCK=18, MISO=19, MOSI=23 (VSPI)
   // The Touchscreen also shares this VSPI bus (CS=33). We MUST pull the touch CS 
@@ -279,6 +298,8 @@ void setup() {
   lastFrameAt = millis();
 }
 
+static uint32_t currentFrame = 0;
+
 // ── loop ──────────────────────────────────────────────────────────────────────
 void loop() {
   uint32_t now = millis();
@@ -286,9 +307,41 @@ void loop() {
   lastFrameAt += frameIntervalMs;
 
   if (header.colorMode == 2) {
-    readAndRenderColorFrame();
+    if (readAndRenderColorFrame()) {
+      currentFrame++;
+      if (currentFrame >= header.frameCount) currentFrame = 0;
+      Serial.printf("FRAME:%u/%u\n", currentFrame, header.frameCount);
+    }
   } else {
-    if (!readNextFrame1Bit()) return;
+    if (!readNextFrame1Bit()) {
+      currentFrame = 0; // Reset on loop/end
+      return;
+    }
     renderFrame1Bit();
+    currentFrame++;
+    
+    static uint32_t lastDebugTime = 0;
+    if (millis() - lastDebugTime > 250) { // Limit to ~4 FPS to avoid saturating 115200 baud & WDT reset
+      lastDebugTime = millis();
+      Serial.printf("FRAME:%u/%u\nFRAME_DATA:", currentFrame, header.frameCount);
+      
+      // Fast hex conversion (avoids 1024 individual printf calls)
+      const char hexMap[] = "0123456789ABCDEF";
+      char outBuf[65];
+      outBuf[64] = 0;
+      for (size_t i = 0; i < FRAME_BYTES; i += 32) {
+        for(int j=0; j<32; j++) {
+          uint8_t b = frameBuf[i+j];
+          outBuf[j*2]   = hexMap[b >> 4];
+          outBuf[j*2+1] = hexMap[b & 0xF];
+        }
+        Serial.print(outBuf);
+      }
+      Serial.println();
+    } else {
+      // Just send the frame counter for smooth progress
+      Serial.printf("FRAME:%u/%u\n", currentFrame, header.frameCount);
+    }
   }
 }
+

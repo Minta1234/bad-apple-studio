@@ -110,10 +110,19 @@ if not exist "backend\package.json" (
     exit /b 1
 )
 
-pushd backend
+echo [5/5] Installing root dependencies (Electron)...
 call npm install
 if errorlevel 1 (
-    echo [ERROR] npm install failed - see the output above.
+    echo [ERROR] npm install in root failed.
+    pause
+    exit /b 1
+)
+
+pushd backend
+echo Installing backend dependencies...
+call npm install
+if errorlevel 1 (
+    echo [ERROR] npm install in backend failed - see the output above.
     popd
     pause
     exit /b 1
@@ -123,7 +132,6 @@ popd
 echo.
 echo ================================================
 echo  Install complete.
-echo  Run  run.bat  to start the server, then open
-echo  http://localhost:3000
+echo  Run run.bat to start the Bad Apple Studio app.
 echo ================================================
 pause

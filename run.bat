@@ -1,2 +1,2 @@
 @echo off 
-node .\backend\server.js
+npm start

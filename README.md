@@ -30,7 +30,10 @@ Written from scratch using PlatformIO + U8g2 (supporting both SSD1306 and SH1106
 
 ## Prerequisites & Installation
 
-You need 4 tools before running the server: **Node.js**, **Python** (PlatformIO Core is a Python package), **ffmpeg**, and **PlatformIO Core**.
+You need 4 tools before running or building the app: **Node.js**, **Python** (PlatformIO Core is a Python package), **ffmpeg**, and **PlatformIO Core**.
+
+> [!WARNING]
+> Even when packaged as an `.exe`, this application requires **ffmpeg** and **PlatformIO** to be installed on the host machine and added to the system `PATH`. The Electron builder does not bundle these massive CLI tools.
 
 ### Windows — one-shot install
 
@@ -38,9 +41,7 @@ You need 4 tools before running the server: **Node.js**, **Python** (PlatformIO 
 install.bat
 ```
 
-Checks each tool, installs whatever's missing via `winget`, then runs `npm install` in `backend/`. If it installs Node.js/Python/ffmpeg for the first time, Windows won't expose them on `PATH` until you open a **new** terminal — the script detects this, tells you to reopen the terminal, and exit early. Just run `install.bat` again in the new window to finish (it skips whatever's already installed and picks up where it left off).
-
-Requires `winget` (App Installer — preinstalled on Windows 10 2004+/Windows 11; if missing, grab it from the Microsoft Store first).
+Checks each tool, installs whatever's missing via `winget`, then runs `npm install`. If it installs Node.js/Python/ffmpeg for the first time, Windows won't expose them on `PATH` until you open a **new** terminal.
 
 ### macOS / Linux — manual steps
 
@@ -50,30 +51,33 @@ sudo apt install ffmpeg          # or `brew install ffmpeg` on macOS
 
 # 2) PlatformIO Core CLI (compiles firmware + includes filesystem tools)
 pip install platformio --break-system-packages
-pio pkg install -g -p espressif32   # Pre-download ESP32 toolchain (avoids lag on first job)
+pio pkg install -g -p espressif32   # Pre-download ESP32 toolchain
 
-# 3) Backend dependencies
-cd backend && npm install
+# 3) App dependencies
+npm install
 ```
 
 ---
 
-## Running the Server
+## Running & Building the Desktop App
 
-**Windows:**
-```bat
-run.bat
-```
+The application is built using Electron, packaging the web frontend and Node.js backend together.
 
-**macOS / Linux:**
+### Development Mode
+
+To launch the app locally:
 ```bash
-cd backend
-node server.js
+npm start
 ```
+This spawns the Electron app and automatically starts the backend server internally. Web Serial works seamlessly within the app.
 
-Then open http://localhost:3000 in your browser.
+### Build Executable (.exe)
 
-The web interface (`web/index.html`) is served directly by the backend (eliminates CORS issues and runs in a single process). Web Serial works seamlessly because it runs over `localhost`.
+To pack the application into a standalone desktop installer (`.exe`):
+```bash
+npm run build
+```
+This will use `electron-builder` to bundle the app and output the executable to the `dist/` directory.
 
 ---
 
