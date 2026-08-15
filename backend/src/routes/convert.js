@@ -11,21 +11,38 @@ const { createJob, updateJob, getJob } = require('../jobs');
 const { extractFrames }                = require('../lib/ffmpegExtract');
 const { packFrames }                   = require('../lib/packFrames');
 const { extractFramesColor, packFramesColor } = require('../lib/packFramesColor');
-const { compileFirmware, DISPLAY_ENV, DISPLAY_RESOLUTION } = require('../lib/buildFirmware');
+const { compileFirmware, getEnvironments } = require('../lib/buildFirmware');
 
 const router = express.Router();
 
 const JOBS_ROOT = path.join(__dirname, '..', '..', 'jobs');
 fs.mkdirSync(JOBS_ROOT, { recursive: true });
 
-// Resolution is looked up per display — see DISPLAY_RESOLUTION in buildFirmware.js
+// Parse firmware/partitions.csv to find the actual SPIFFS partition size in bytes
+// Uses the hex offset+size to compute usable bytes, applying 75% safety for mkspiffs overhead
+function getSpiffsMaxBytes() {
+  try {
+    const csvPath = path.resolve(__dirname, '../../../firmware/partitions.csv');
+    const lines = fs.readFileSync(csvPath, 'utf8').split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('#') || !trimmed) continue;
+      const parts = trimmed.split(',').map(s => s.trim());
+      if (parts[0] === 'spiffs') {
+        const size = parseInt(parts[4], 16);
+        if (!isNaN(size)) return Math.floor(size * 0.75); // 75% to account for mkspiffs overhead
+      }
+    }
+  } catch (_) {}
+  return 1966080; // fallback: 2.68MB × 0.75
+}
 
 // Partition offsets must match firmware/partitions.csv exactly
 const PART_OFFSETS = {
   bootloader: 4096,      // 0x1000
   partitions: 32768,     // 0x8000
   firmware:   65536,     // 0x10000
-  spiffs:     1441792,   // 0x160000 (Updated from partitions.csv)
+  spiffs:     1441792,   // 0x160000
 };
 
 const upload = multer({
@@ -59,25 +76,36 @@ router.post('/convert', assignJobId, upload.single('video'), async (req, res) =>
     return res.status(400).json({ error: 'No video file found in upload (field name must be "video")' });
   }
 
-  const display = req.body.display;
-  if (!DISPLAY_ENV[display]) {
-    return res.status(400).json({ error: `display must be one of: ${Object.keys(DISPLAY_ENV).join(', ')}` });
+  const envs = getEnvironments();
+  const displayEnv = req.body.display; // Now this is the env string directly (e.g. 'esp32-oled096')
+  const envConfig = envs.find(e => e.id === displayEnv);
+  
+  if (!envConfig) {
+    return res.status(400).json({ error: `display must be a valid environment from platformio.ini` });
   }
 
   const fps       = clampInt(req.body.fps,       1,   30,  12);
   const threshold = clampInt(req.body.threshold,  0,  255, 128);
   const invert    = req.body.invert === 'true' || req.body.invert === true;
-  const isColor   = req.body.colorMode === 'true' && display === '2432s028';
-  // forSdCard: skip SPIFFS size limit and always use full 320x240 resolution
+  const rotation  = parseFloat(req.body.rotation) || 0;
+  const zoom      = parseFloat(req.body.zoom) || 1.0;
+  const panX      = parseFloat(req.body.panX) || 0;
+  const panY      = parseFloat(req.body.panY) || 0;
+
+  // Use color mode if requested AND the environment supports it
+  const isColor   = req.body.colorMode === 'true' && envConfig.isColor;
+  
+  // forSdCard: skip SPIFFS size limit and always use full resolution
   const forSdCard = req.body.forSdCard === 'true' && isColor;
 
-  const { width: W, height: H } = DISPLAY_RESOLUTION[display];
+  let W = envConfig.width;
+  let H = envConfig.height;
 
   createJob(jobId);
   res.status(202).json({ jobId });
 
   // Process in background so we don't block the HTTP response (firmware compile can take minutes)
-  processJob(jobId, req.file.path, { display, fps, threshold, invert, isColor, forSdCard, width: W, height: H }).catch((err) => {
+  processJob(jobId, req.file.path, { env: displayEnv, fps, threshold, invert, isColor, forSdCard, rotation, zoom, panX, panY, width: W, height: H }).catch((err) => {
     updateJob(jobId, { status: 'error', error: err.message });
   });
 });
@@ -130,7 +158,7 @@ router.get('/:id/files/:name', (req, res) => {
   }
 });
 
-async function processJob(jobId, uploadedVideoPath, { display, fps, threshold, invert, isColor, forSdCard, width: W, height: H }) {
+async function processJob(jobId, uploadedVideoPath, { env, fps, threshold, invert, isColor, forSdCard, rotation, zoom, panX, panY, width: W, height: H }) {
   const jobDir      = path.join(JOBS_ROOT, jobId);
   const framesDir   = path.join(jobDir, 'frames');
   const videoDatPath = path.join(jobDir, 'video.dat');
@@ -155,46 +183,68 @@ async function processJob(jobId, uploadedVideoPath, { display, fps, threshold, i
     const totalFrames = Math.ceil(duration * fps);
 
     if (forSdCard) {
-      // SD card has no size limit — always use full 320x240 resolution for maximum quality
-      W = 320;
-      H = 240;
+      // SD card has no size limit — always use full resolution
     } else {
-      // SPIFFS has significant overhead (up to 25%). Our partition is ~2.68MB.
-      // So 1.9MB is a very safe limit to guarantee mkspiffs won't fail.
-      const MAX_SPIFFS_SIZE = 1900000;
+      // Dynamically read the actual SPIFFS partition size from partitions.csv
+      const MAX_SPIFFS_SIZE = getSpiffsMaxBytes();
 
       if (totalFrames > 0) {
-        const maxBytesPerFrame = MAX_SPIFFS_SIZE / totalFrames;
-        const maxPixels = maxBytesPerFrame / 2;
+        const bytesPerPixel = 2; // RGB565
+        let effectiveFps = fps;
+        let fitted = false;
 
-        const SCALES = [1, 2, 4, 5, 8, 10];
-        let selectedScale = null;
-
-        for (const scale of SCALES) {
-          const testW = 320 / scale;
-          const testH = 240 / scale;
-          if ((testW * testH) <= maxPixels) {
-            selectedScale = scale;
-            W = testW;
-            H = testH;
+        // First try: reduce FPS slightly (down to half) before sacrificing resolution
+        for (let tryFps = fps; tryFps >= Math.max(1, Math.floor(fps / 2)); tryFps--) {
+          const tryFrames = Math.ceil(duration * tryFps);
+          if (tryFrames <= 0) continue;
+          const maxBytesPerFrame = MAX_SPIFFS_SIZE / tryFrames;
+          const maxPixels = maxBytesPerFrame / bytesPerPixel;
+          if ((W * H) <= maxPixels) {
+            effectiveFps = tryFps;
+            fitted = true;
+            if (tryFps !== fps) {
+              updateJob(jobId, { progress: `Auto-reduced FPS: ${fps}→${tryFps} to fit SPIFFS.` });
+            }
             break;
           }
         }
 
-        if (!selectedScale) {
-          throw new Error(`Video is ${duration.toFixed(1)}s long and cannot be scaled down any further. Please use a shorter video or reduce FPS.`);
+        // Second try: reduce resolution by scale factors
+        if (!fitted) {
+          const tryFrames = Math.ceil(duration * Math.max(1, Math.floor(fps / 2)));
+          const maxBytesPerFrame = tryFrames > 0 ? MAX_SPIFFS_SIZE / tryFrames : MAX_SPIFFS_SIZE;
+          const maxPixels = maxBytesPerFrame / bytesPerPixel;
+          const SCALES = [2, 4, 5, 8, 10];
+          for (const scale of SCALES) {
+            const testW = Math.floor(W / scale);
+            const testH = Math.floor(H / scale);
+            if ((testW * testH) <= maxPixels) {
+              W = testW;
+              H = testH;
+              effectiveFps = Math.max(1, Math.floor(fps / 2));
+              fitted = true;
+              updateJob(jobId, { progress: `Auto-scaled to ${W}x${H} @${effectiveFps}fps to fit SPIFFS (${(MAX_SPIFFS_SIZE/1024).toFixed(0)}KB available).` });
+              break;
+            }
+          }
         }
+
+        if (!fitted) {
+          throw new Error(`Video is ${duration.toFixed(1)}s long and cannot fit into SPIFFS (${(MAX_SPIFFS_SIZE/1024).toFixed(0)}KB). Use a shorter video, lower FPS, or enable SD Card mode.`);
+        }
+
+        fps = effectiveFps;
       }
     }
 
     updateJob(jobId, { status: 'extracting', progress: `Converting video to RGB565 raw (${W}x${H})...` });
-    const rawFile = await extractFramesColor(uploadedVideoPath, framesDir, { fps, width: W, height: H, isImage, duration });
+    const rawFile = await extractFramesColor(uploadedVideoPath, framesDir, { fps, width: W, height: H, isImage, duration, rotation, zoom, panX, panY });
 
     updateJob(jobId, { status: 'packing', progress: `Packing color frames into video.dat...` });
     packFramesColor(rawFile, videoDatPath, { width: W, height: H, fps });
   } else {
     updateJob(jobId, { status: 'extracting', progress: 'Extracting frames from video with ffmpeg...' });
-    const frames = await extractFrames(uploadedVideoPath, framesDir, { fps, width: W, height: H, isImage, duration });
+    const frames = await extractFrames(uploadedVideoPath, framesDir, { fps, width: W, height: H, isImage, duration, rotation, zoom, panX, panY });
 
     updateJob(jobId, { status: 'packing', progress: `RLE-encoding ${frames.length} frames...` });
     packFrames(frames, videoDatPath, { width: W, height: H, fps, threshold, invert });
@@ -207,7 +257,7 @@ async function processJob(jobId, uploadedVideoPath, { display, fps, threshold, i
   updateJob(jobId, { status: 'building', progress: 'Compiling firmware...' });
   const files = await compileFirmware({
     jobDir,
-    display,
+    env,
     videoDatPath,
     forSdCard,
     onProgress: (msg) => updateJob(jobId, { progress: msg }),

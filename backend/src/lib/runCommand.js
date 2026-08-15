@@ -2,8 +2,6 @@
 
 const { spawn } = require('child_process');
 
-// รัน external command แบบ promise พร้อม capture stdout/stderr
-// ไม่ใช้ exec()/shell string เพื่อกัน shell injection — ส่ง args เป็น array เสมอ
 function run(cmd, args, opts = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { ...opts, shell: false });

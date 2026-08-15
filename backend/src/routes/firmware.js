@@ -5,6 +5,8 @@ const fs      = require('fs');
 const path    = require('path');
 const { spawn } = require('child_process');
 
+const { getEnvironments } = require('../lib/buildFirmware');
+
 const router = express.Router();
 
 // The firmware template directory (read-only source of truth)
@@ -20,6 +22,11 @@ const EDITABLE_FILES = [
 function resolveEditable(id) {
   return EDITABLE_FILES.find((f) => f.id === id) || null;
 }
+
+// GET /api/firmware/envs — get dynamically parsed platformio.ini environments
+router.get('/envs', (req, res) => {
+  res.json(getEnvironments());
+});
 
 // GET /api/firmware/files  — list of editable files
 router.get('/files', (req, res) => {
@@ -52,10 +59,11 @@ router.put('/files/:id', express.text({ type: '*/*', limit: '2mb' }), (req, res)
 });
 
 // POST /api/firmware/compile  — stream pio build log via Server-Sent Events
-// Body JSON: { env: 'esp32-oled096' | 'esp32-oled130' }
+// Body JSON: { env: 'esp32-oled096' }
 router.post('/compile', express.json(), (req, res) => {
-  const allowedEnvs = ['esp32-oled096', 'esp32-oled130', 'esp32-ili9341'];
-  const env = allowedEnvs.includes(req.body?.env) ? req.body.env : 'esp32-oled096';
+  const envs = getEnvironments();
+  const envConfig = envs.find(e => e.id === req.body?.env);
+  const env = envConfig ? envConfig.id : (envs[0]?.id || 'esp32-oled096');
 
   // SSE headers
   res.setHeader('Content-Type',  'text/event-stream');

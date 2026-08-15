@@ -6,24 +6,86 @@ const { run } = require('./runCommand');
 
 const FIRMWARE_TEMPLATE = path.resolve(__dirname, '../../../firmware');
 
-const DISPLAY_ENV = {
-  '0.96':      'esp32-oled096',
-  '1.3':       'esp32-oled130',
-  '2432s028':  'esp32-ili9341',  // ESP32-2432S028 "Cheap Yellow Display"
-};
+/**
+ * Parse platformio.ini and return all [env:xxx] blocks with display metadata,
+ * board info, installed libraries, and a custom-board flag.
+ */
+function getEnvironments() {
+  const iniContent = fs.readFileSync(path.join(FIRMWARE_TEMPLATE, 'platformio.ini'), 'utf8');
+  const envs = [];
+  let currentEnv = null;
+  let inLibDeps = false;
 
-// Resolution per display key — used in convert.js to resize the video correctly
-const DISPLAY_RESOLUTION = {
-  '0.96':      { width: 128, height: 64  },
-  '1.3':       { width: 128, height: 64  },
-  '2432s028':  { width: 320, height: 240 },
-};
+  for (const line of iniContent.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith(';')) continue;
 
-// Whitelist to prevent clients from injecting arbitrary values as the -e argument
-function resolveEnv(display) {
-  const env = DISPLAY_ENV[display];
-  if (!env) throw new Error(`display must be one of: ${Object.keys(DISPLAY_ENV).join(', ')}`);
-  return env;
+    // New env section
+    const envMatch = trimmed.match(/^\[env:(.+?)\]$/);
+    if (envMatch) {
+      if (currentEnv) envs.push(currentEnv);
+      currentEnv = {
+        id:       envMatch[1],
+        label:    envMatch[1],
+        width:    128,
+        height:   64,
+        isColor:  false,
+        libDeps:  [],
+        board:    'esp32dev',
+        isCustom: envMatch[1].startsWith('custom-'),
+        hasSdCard: false,
+      };
+      inLibDeps = false;
+      continue;
+    }
+
+    if (currentEnv) {
+      // board identifier
+      if (/^board\s*=/.test(trimmed)) {
+        currentEnv.board = trimmed.split('=')[1].trim();
+      }
+
+      // Start of lib_deps block
+      if (/^lib_deps/.test(trimmed)) {
+        inLibDeps = true;
+        // If value is on the same line: lib_deps = foo/bar@^1.0
+        const inline = trimmed.replace(/^lib_deps\s*=\s*/, '').trim();
+        if (inline) currentEnv.libDeps.push(inline);
+        continue;
+      }
+
+      // Continuation of lib_deps (indented lines)
+      if (inLibDeps && /^\s/.test(line) && trimmed && !trimmed.startsWith('-D') && !trimmed.startsWith('-I')) {
+        currentEnv.libDeps.push(trimmed);
+        continue;
+      }
+
+      // Any non-indented key ends lib_deps
+      if (!/^\s/.test(line) && trimmed) inLibDeps = false;
+
+      // Display dimensions from build_flags
+      if (trimmed.startsWith('-DDISPLAY_W=')) currentEnv.width  = parseInt(trimmed.split('=')[1], 10);
+      if (trimmed.startsWith('-DDISPLAY_H=')) currentEnv.height = parseInt(trimmed.split('=')[1], 10);
+
+      // Detect color display
+      const lower = trimmed.toLowerCase();
+      if (lower.includes('tft') || lower.includes('ili9341') || lower.includes('st7789') || lower.includes('color')) {
+        currentEnv.isColor = true;
+      }
+      
+      if (trimmed.includes('HAS_SD_CARD')) {
+        currentEnv.hasSdCard = true;
+      }
+    }
+  }
+  if (currentEnv) envs.push(currentEnv);
+  return envs;
+}
+
+function resolveEnv(envName) {
+  const found = getEnvironments().find(e => e.id === envName);
+  if (!found) throw new Error(`Environment [env:${envName}] not found in platformio.ini`);
+  return found;
 }
 
 // Copy the firmware template project to a job-specific workspace
@@ -38,8 +100,8 @@ function prepareWorkspace(jobDir) {
   return workDir;
 }
 
-async function compileFirmware({ jobDir, display, videoDatPath, forSdCard, onProgress }) {
-  const env = resolveEnv(display);
+async function compileFirmware({ jobDir, env, videoDatPath, forSdCard, onProgress }) {
+  resolveEnv(env);
   const workDir = prepareWorkspace(jobDir);
 
   if (!forSdCard) {
@@ -56,8 +118,8 @@ async function compileFirmware({ jobDir, display, videoDatPath, forSdCard, onPro
   const files = {
     bootloader: path.join(buildOut, 'bootloader.bin'),
     partitions: path.join(buildOut, 'partitions.bin'),
-    firmware: path.join(buildOut, 'firmware.bin'),
-    spiffs: path.join(buildOut, 'spiffs.bin'),
+    firmware:   path.join(buildOut, 'firmware.bin'),
+    spiffs:     path.join(buildOut, 'spiffs.bin'),
   };
 
   for (const [name, p] of Object.entries(files)) {
@@ -69,4 +131,4 @@ async function compileFirmware({ jobDir, display, videoDatPath, forSdCard, onPro
   return files;
 }
 
-module.exports = { compileFirmware, DISPLAY_ENV, DISPLAY_RESOLUTION };
+module.exports = { compileFirmware, getEnvironments, resolveEnv };

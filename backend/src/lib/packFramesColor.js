@@ -3,17 +3,18 @@
 const fs = require('fs');
 const path = require('path');
 const { run } = require('./runCommand');
+const { buildTransformFilter } = require('./ffmpegExtract');
 
 const HEADER_SIZE = 16;
 
-async function extractFramesColor(videoPath, outDir, { fps, width, height, isImage, duration = 0 }) {
+async function extractFramesColor(videoPath, outDir, { fps, width, height, isImage, duration = 0, rotation = 0, zoom = 1.0, panX = 0, panY = 0 }) {
   fs.mkdirSync(outDir, { recursive: true });
   const rawFile = path.join(outDir, 'video_rgb565.raw');
 
+  const transform = buildTransformFilter(width, height, zoom, panX, panY, rotation);
   const scaleFilter =
     (isImage ? '' : `fps=${fps},`) +
-    `scale=${width}:${height}:force_original_aspect_ratio=decrease,` +
-    `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=black`;
+    transform;
 
   const args = ['-y', '-i', videoPath];
 
