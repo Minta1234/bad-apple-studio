@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: "Segoe UI", Arial, sans-serif;
+      background: #fff;
+      color: #202124;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* Header */
+    #header {
+      padding: 20px 24px 12px;
+      border-bottom: 1px solid #e0e0e0;
+    }
+    #header h2 {
+      font-size: 14px;
+      font-weight: 500;
+      color: #1a73e8;
+      margin-bottom: 4px;
+    }
+    #header p {
+      font-size: 13px;
+      color: #5f6368;
+    }
+
+    /* Port list */
+    #port-list {
+      flex: 1;
+      overflow-y: auto;
+      border: 1px solid #dadce0;
+      margin: 16px 24px;
+      border-radius: 4px;
+    }
+    .port-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 16px;
+      cursor: pointer;
+      border-bottom: 1px solid #f1f3f4;
+      transition: background 0.1s;
+    }
+    .port-item:last-child { border-bottom: none; }
+    .port-item:hover { background: #f8f9fa; }
+    .port-item.selected { background: #e8f0fe; }
+
+    .port-item input[type="radio"] {
+      accent-color: #1a73e8;
+      width: 16px; height: 16px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .port-info { flex: 1; }
+    .port-name { font-size: 13px; color: #202124; font-weight: 500; }
+    .port-com  { font-size: 12px; color: #5f6368; margin-top: 1px; }
+    .port-paired {
+      font-size: 11px;
+      color: #1a73e8;
+      background: #e8f0fe;
+      border-radius: 10px;
+      padding: 2px 8px;
+      flex-shrink: 0;
+    }
+
+    /* Empty state */
+    #empty {
+      padding: 40px;
+      text-align: center;
+      color: #5f6368;
+      font-size: 13px;
+      display: none;
+    }
+
+    /* Footer buttons */
+    #footer {
+      padding: 12px 24px 16px;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      border-top: 1px solid #e0e0e0;
+    }
+    button {
+      padding: 8px 20px;
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      transition: background 0.15s, box-shadow 0.15s;
+    }
+    #btn-cancel {
+      background: transparent;
+      color: #1a73e8;
+      border: 1px solid transparent;
+    }
+    #btn-cancel:hover { background: #e8f0fe; }
+    #btn-connect {
+      background: #1a73e8;
+      color: #fff;
+    }
+    #btn-connect:hover:not(:disabled) { background: #1557b0; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+    #btn-connect:disabled { background: #dadce0; color: #80868b; cursor: default; }
+
+    /* Help icon */
+    #help {
+      position: absolute;
+      bottom: 20px;
+      left: 24px;
+      color: #5f6368;
+      font-size: 18px;
+      cursor: pointer;
+    }
+    #help:hover { color: #1a73e8; }
+  </style>
+</head>
+<body>
+  <div id="header">
+    <h2 id="origin-label">http://127.0.0.1:3000</h2>
+    <p id="subtitle">wants to connect to a serial port</p>
+  </div>
+
+  <div id="port-list"></div>
+  <div id="empty">No serial ports found.<br>Make sure your device is plugged in.</div>
+
+  <div id="footer">
+    <span id="help" title="Help">?</span>
+    <button id="btn-cancel">Cancel</button>
+    <button id="btn-connect" disabled>Connect</button>
+  </div>
+
+  <script>
+    let selectedPortId = null;
+    let currentPorts = [];
+
+    function render(ports) {
+      const list = document.getElementById('port-list');
+      const empty = document.getElementById('empty');
+      list.innerHTML = '';
+
+      if (!ports || ports.length === 0) {
+        list.style.display = 'none';
+        empty.style.display = 'block';
+        return;
+      }
+
+      ports.forEach((port, i) => {
+        const name = port.displayName || port.portName || 'Unknown Device';
+        const com  = port.portId || '';
+        const isPaired = port.paired;
+
+        const isSelected = port.portId === selectedPortId;
+        const item = document.createElement('div');
+        item.className = 'port-item' + (isSelected ? ' selected' : '');
+        item.dataset.id = port.portId;
+        item.innerHTML = `
+          <input type="radio" name="port" id="p${i}" value="${port.portId}" ${isSelected ? 'checked' : ''}>
+          <label class="port-info" for="p${i}" style="cursor:pointer">
+            <div class="port-name">${name}</div>
+            ${com ? `<div class="port-com">${com}</div>` : ''}
+          </label>
+          ${isPaired ? '<span class="port-paired">Paired</span>' : ''}
+        `;
+
+        item.addEventListener('click', () => {
+          document.querySelectorAll('.port-item').forEach(el => el.classList.remove('selected'));
+          item.classList.add('selected');
+          item.querySelector('input[type="radio"]').checked = true;
+          selectedPortId = port.portId;
+          document.getElementById('btn-connect').disabled = false;
+        });
+
+        list.appendChild(item);
+      });
+    }
+    document.getElementById('btn-connect').addEventListener('click', () => {
+      if (selectedPortId) window.portPicker.confirm(selectedPortId);
+    });
+    document.getElementById('btn-cancel').addEventListener('click', () => {
+      window.portPicker.cancel();
+    });
+
+    // Receive full snapshot from main process (initial open)
+    window.portPicker.onPorts((ports) => {
+      currentPorts = ports || [];
+      render(currentPorts);
+    });
+
+    // Receive incremental hotplug events while the picker stays open
+    window.portPicker.onPortDetection(({ port, removed }) => {
+      const idx = currentPorts.findIndex(p => p.portId === port.portId);
+
+      if (removed) {
+        if (idx !== -1) currentPorts.splice(idx, 1);
+        if (selectedPortId === port.portId) {
+          // The port the user had selected just disappeared — clear
+          // selection rather than leaving a stale, unconfirmable choice.
+          selectedPortId = null;
+          document.getElementById('btn-connect').disabled = true;
+        }
+      } else if (idx !== -1) {
+        currentPorts[idx] = port; // update existing entry (e.g. re-enumeration)
+      } else {
+        currentPorts.push(port); // newly plugged-in device
+      }
+
+      render(currentPorts);
+    });
+  </script>
+</body>
+</html>

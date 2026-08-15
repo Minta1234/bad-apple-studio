@@ -15,10 +15,13 @@
       "output": "dist"
     },
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "build/icon.ico"
     },
     "files": [
       "main.js",
+      "preload-picker.js",
+      "port-picker.html",
       "backend/**/*",
       "web/**/*",
       "firmware/**/*"
