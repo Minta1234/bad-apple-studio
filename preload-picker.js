@@ -6,3 +6,10 @@ contextBridge.exposeInMainWorld('portPicker', {
   confirm:          (portId) => ipcRenderer.send('picker:confirm', portId),
   cancel:           () => ipcRenderer.send('picker:cancel'),
 });
+
+contextBridge.exposeInMainWorld('bluetoothPicker', {
+  onDevices:          (cb) => ipcRenderer.on('picker:bluetooth-devices', (_, devices) => cb(devices)),
+  onDeviceDetection:  (cb) => ipcRenderer.on('picker:bluetooth-device-detected', (_, device) => cb(device)),
+  confirm:            (deviceId) => ipcRenderer.send('picker:bluetooth-confirm', deviceId),
+  cancel:             () => ipcRenderer.send('picker:bluetooth-cancel'),
+});

@@ -4,6 +4,9 @@
 
 #include <Arduino.h>
 #include <SPIFFS.h>
+#ifdef HAS_BLE
+#include "BleServer.h"
+#endif
 
 // ── Display driver selection ──────────────────────────────────────────────────
 #if defined(DISPLAY_DRIVER_TFT) || defined(DISPLAY_DRIVER_ILI9341) || defined(DISPLAY_DRIVER_ST7789)
@@ -62,15 +65,143 @@ struct VideoHeader {
   uint8_t  reserved[6];
 };
 
-static File       videoFile;
+File       videoFile;
+bool       isReceivingVideo = false;
+
 static VideoHeader header;
 static uint32_t   headerEndOffset = 0;
 static uint32_t   frameIntervalMs = 66;
 static uint32_t   lastFrameAt     = 0;
 
-// Frame buffers (static — live in BSS, not stack)
+// Which filesystem /video.dat currently lives on — set at boot and again after
+// every successful BLE upload, so playback and reloadVideo() always agree.
+static bool videoOnSD = false;
+
+void reloadVideo() {
+  if (videoFile) videoFile.close();
+#ifdef HAS_SD_CARD
+  videoFile = videoOnSD ? SD.open("/video.dat", "r") : SPIFFS.open("/video.dat", "r");
+#else
+  videoFile = SPIFFS.open("/video.dat", "r");
+#endif
+  if (videoFile && videoFile.read((uint8_t*)&header, sizeof(header)) == sizeof(header)) {
+    headerEndOffset = sizeof(header);
+    if (header.fps > 0) frameIntervalMs = 1000UL / header.fps;
+    Serial.printf("Reloaded Video: %ux%u, %u frames, %u fps (source=%s)\n",
+                  header.width, header.height, header.frameCount, header.fps,
+                  videoOnSD ? "SD" : "SPIFFS");
+  } else {
+    Serial.println("Failed to reload video header.");
+  }
+}
+
+// ── BLE upload — storage selection ────────────────────────────────────────────
+// The board's onboard SPIFFS partition is small (see partitions.csv). A large,
+// full-quality video won't fit — in that case we need a microSD card to catch
+// the overflow instead of failing a write partway through. Reserve headroom on
+// both targets so we never fill a filesystem to the very last byte (SPIFFS in
+// particular gets unreliable near 100% full).
+static const uint32_t SPIFFS_RESERVE_BYTES = 32UL * 1024;
+
+#ifdef HAS_SD_CARD
+static const uint32_t SD_RESERVE_BYTES = 64UL * 1024;
+
+static SPIClass sdSPI(VSPI);
+static bool     sdMounted = false;
+
+static bool ensureSDMounted() {
+  if (sdMounted) return true;
+  // CYD board: SD and the resistive touch controller share the VSPI bus.
+  // Touch CS must be held high or it will jam SD's MISO line.
+  pinMode(33, OUTPUT);
+  digitalWrite(33, HIGH);
+  pinMode(5, OUTPUT);
+  digitalWrite(5, HIGH);
+  delay(50);
+  sdSPI.begin(18, 19, 23, 5); // SCK, MISO, MOSI, SS
+  sdMounted = SD.begin(5, sdSPI, 4000000); // 4MHz: safe, avoids 'cmd:0x00' errors
+  return sdMounted;
+}
+#endif
+
+static uint32_t spiffsFreeBytes() {
+  uint32_t total = SPIFFS.totalBytes();
+  uint32_t used  = SPIFFS.usedBytes();
+  return (total > used) ? (total - used) : 0;
+}
+
+#ifdef HAS_SD_CARD
+static uint32_t sdFreeBytes() {
+  if (!ensureSDMounted()) return 0;
+  uint64_t total = SD.totalBytes();
+  uint64_t used  = SD.usedBytes();
+  return (total > used) ? (uint32_t)(total - used) : 0;
+}
+#endif
+
+// Where the in-progress BLE upload is being written, and how far along it is.
+enum class UploadTarget : uint8_t { NONE, SPIFFS_TARGET, SD_TARGET };
+static UploadTarget uploadTarget       = UploadTarget::NONE;
+uint32_t            expectedUploadBytes = 0;
+uint32_t            receivedUploadBytes = 0;
+
+// Called on BLE "START:<size>". Picks SPIFFS if the file fits within the
+// onboard limit, otherwise falls back to the SD card. Returns false (with no
+// file opened) if neither target has room — the caller reports this upstream
+// so the user knows to insert/replace the microSD card.
+bool beginVideoReceive(uint32_t expectedBytes) {
+  if (videoFile) videoFile.close();
+  expectedUploadBytes = expectedBytes;
+  receivedUploadBytes = 0;
+
+  if ((uint64_t)expectedBytes + SPIFFS_RESERVE_BYTES <= spiffsFreeBytes()) {
+    videoFile = SPIFFS.open("/video.dat", "w");
+    if (!videoFile) { uploadTarget = UploadTarget::NONE; return false; }
+    uploadTarget     = UploadTarget::SPIFFS_TARGET;
+    isReceivingVideo = true;
+    return true;
+  }
+
+#ifdef HAS_SD_CARD
+  if ((uint64_t)expectedBytes + SD_RESERVE_BYTES <= sdFreeBytes()) {
+    videoFile = SD.open("/video.dat", "w");
+    if (!videoFile) { uploadTarget = UploadTarget::NONE; return false; }
+    uploadTarget     = UploadTarget::SD_TARGET;
+    isReceivingVideo = true;
+    return true;
+  }
+#endif
+
+  uploadTarget     = UploadTarget::NONE;
+  isReceivingVideo = false;
+  return false;
+}
+
+bool uploadTargetIsSD() { return uploadTarget == UploadTarget::SD_TARGET; }
+
+// Called on BLE "END", or to discard a partial transfer (disconnect / write
+// failure). Only swaps videoOnSD + reloads playback if the full byte count
+// arrived intact — a truncated file is left on disk but never played, and
+// the caller reports the mismatch upstream instead of silently looping stale
+// or corrupt frames.
+void endVideoReceive(bool aborted) {
+  if (videoFile) videoFile.close();
+  isReceivingVideo = false;
+  if (!aborted && uploadTarget != UploadTarget::NONE && receivedUploadBytes == expectedUploadBytes) {
+    videoOnSD = uploadTargetIsSD();
+    reloadVideo();
+  }
+  uploadTarget = UploadTarget::NONE;
+}
+
+
+// Frame buffers — only needed for 1-bit (B&W) display modes.
+// The ILI9341 CYD board uses RGB565 color mode exclusively, so skip these
+// to free ~87KB of precious DRAM (needed by NimBLE stack).
+#ifndef DISPLAY_DRIVER_ILI9341
 static uint8_t frameBuf[FRAME_BYTES];            // 1-bit packed, LSB-first
 static uint8_t payload[(FRAME_W * FRAME_H) + 16]; // worst-case RLE payload + safety margin
+#endif
 
 // ── Varint (LEB128) decoder ───────────────────────────────────────────────────
 static uint32_t readVarint(const uint8_t* data, size_t len, size_t& idx) {
@@ -85,7 +216,8 @@ static uint32_t readVarint(const uint8_t* data, size_t len, size_t& idx) {
   return result;
 }
 
-// ── RLE decoder → frameBuf ────────────────────────────────────────────────────
+// ── RLE decoder → frameBuf (1-bit B&W displays only) ────────────────────────
+#ifndef DISPLAY_DRIVER_ILI9341
 static void decodeFrame(const uint8_t* pl, size_t plLen) {
   memset(frameBuf, 0, FRAME_BYTES);
   size_t   idx    = 0;
@@ -103,8 +235,10 @@ static void decodeFrame(const uint8_t* pl, size_t plLen) {
     color ^= 1;
   }
 }
+#endif
 
-// ── Read next RLE frame from SPIFFS (1-bit) ───────────────────────────────────
+// ── Read next RLE frame from SPIFFS (1-bit B&W displays only) ────────────────
+#ifndef DISPLAY_DRIVER_ILI9341
 static bool readNextFrame1Bit() {
   // If single-frame (static image), only seek back if we haven't drawn it yet
   if (!videoFile.available()) {
@@ -120,6 +254,7 @@ static bool readNextFrame1Bit() {
   decodeFrame(payload, frameLen);
   return true;
 }
+#endif
 
 // ── Read and Render RGB565 frame directly to TFT ──────────────────────────────
 static bool readAndRenderColorFrame() {
@@ -202,8 +337,9 @@ static bool readAndRenderColorFrame() {
 }
 
 // ── Render frameBuf to display (for 1-bit mode) ───────────────────────────────
+#ifndef DISPLAY_DRIVER_ILI9341
 static void renderFrame1Bit() {
-#if defined(DISPLAY_DRIVER_TFT) || defined(DISPLAY_DRIVER_ILI9341) || defined(DISPLAY_DRIVER_ST7789)
+#if defined(DISPLAY_DRIVER_TFT) || defined(DISPLAY_DRIVER_ST7789)
   static uint16_t lineBuf[FRAME_W];
   tft.startWrite();
   tft.setAddrWindow(0, 0, FRAME_W, FRAME_H);
@@ -222,6 +358,7 @@ static void renderFrame1Bit() {
   u8g2.sendBuffer();
 #endif
 }
+#endif
 
 // ── setup ─────────────────────────────────────────────────────────────────────
 void setup() {
@@ -244,27 +381,14 @@ void setup() {
   bool videoOpened = false;
 
 #ifdef HAS_SD_CARD
-  // The CYD board has a MicroSD card slot. Try to mount it first!
-  // CYD standard SD pins: CS=5, SCK=18, MISO=19, MOSI=23 (VSPI)
-  // The Touchscreen also shares this VSPI bus (CS=33). We MUST pull the touch CS 
-  // high so it doesn't interfere with the SD card on the MISO line.
-  
-  pinMode(33, OUTPUT);
-  digitalWrite(33, HIGH); // Disable Touchscreen SPI
-
-  pinMode(5, OUTPUT);
-  digitalWrite(5, HIGH); // Ensure SD CS is pulled high before init
-  delay(100);            // Give the SD card a moment to power up
-
-  static SPIClass sdSPI(VSPI);
-  sdSPI.begin(18, 19, 23, 5); // SCK, MISO, MOSI, SS
-  
-  // Try to mount at 4MHz (very safe/slow speed) to avoid 'cmd: 0x00' errors
-  if (SD.begin(5, sdSPI, 4000000)) {
+  // The CYD board has a MicroSD card slot. Try to mount it first — if a
+  // previous BLE upload was too big for SPIFFS, the video lives here.
+  if (ensureSDMounted()) {
     videoFile = SD.open("/video.dat", "r");
     if (videoFile) {
       Serial.println("Found /video.dat on SD Card!");
       videoOpened = true;
+      videoOnSD   = true;
     } else {
       Serial.println("No /video.dat on SD Card. Falling back to SPIFFS...");
     }
@@ -296,12 +420,22 @@ void setup() {
                 header.width, header.height, header.frameCount, header.fps);
 
   lastFrameAt = millis();
+  
+  // Start BLE Server (CYD / ESP32-2432S028 only)
+#ifdef HAS_BLE
+  setupBLE();
+#endif
 }
 
 static uint32_t currentFrame = 0;
 
 // ── loop ──────────────────────────────────────────────────────────────────────
 void loop() {
+#ifdef HAS_BLE
+  if (isReceivingVideo) {
+    return; // Pause playback during BLE transfer
+  }
+#endif
   uint32_t now = millis();
   if (now - lastFrameAt < frameIntervalMs) return;
   lastFrameAt += frameIntervalMs;
@@ -313,6 +447,7 @@ void loop() {
       Serial.printf("FRAME:%u/%u\n", currentFrame, header.frameCount);
     }
   } else {
+#ifndef DISPLAY_DRIVER_ILI9341
     if (!readNextFrame1Bit()) {
       currentFrame = 0; // Reset on loop/end
       return;
@@ -321,11 +456,10 @@ void loop() {
     currentFrame++;
     
     static uint32_t lastDebugTime = 0;
-    if (millis() - lastDebugTime > 250) { // Limit to ~4 FPS to avoid saturating 115200 baud & WDT reset
+    if (millis() - lastDebugTime > 250) {
       lastDebugTime = millis();
       Serial.printf("FRAME:%u/%u\nFRAME_DATA:", currentFrame, header.frameCount);
       
-      // Fast hex conversion (avoids 1024 individual printf calls)
       const char hexMap[] = "0123456789ABCDEF";
       char outBuf[65];
       outBuf[64] = 0;
@@ -339,9 +473,8 @@ void loop() {
       }
       Serial.println();
     } else {
-      // Just send the frame counter for smooth progress
       Serial.printf("FRAME:%u/%u\n", currentFrame, header.frameCount);
     }
+#endif
   }
 }
-

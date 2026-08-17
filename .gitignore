@@ -6,3 +6,6 @@ firmware/data/
 .UI/
 todo.txt
 dist/
+.testUI/
+lib.txt
+App/

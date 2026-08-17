@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bad Apple Studio — Bluetooth Upload</title>
+<link rel="icon" href="https://cdn-minta.kawinphopkodsombat.workers.dev/download/favicon.ico">
+<link href="/script/bootstrap.min.css" rel="stylesheet">
+<style>
+  :root {
+    --hair:    #F7F7FB;
+    --eye:     #F03C72;
+    --jacket:  #323842;
+    --tie:     #2DBBEB;
+    --bg-gradient: linear-gradient(145deg, #eef4fb 0%, #dceef8 40%, #f7edf5 100%);
+    --text-main:   var(--jacket);
+    --text-sub:    #6b7590;
+    --card-bg:     rgba(255,255,255,0.72);
+    --card-border: rgba(45,187,235,0.25);
+    --card-shadow: 0 4px 24px rgba(45,187,235,0.10), 0 1px 4px rgba(50,56,66,0.06);
+  }
+
+  body {
+    font-family: 'IBM Plex Mono', 'Cascadia Code', ui-monospace, monospace;
+    background: var(--bg-gradient);
+    background-attachment: fixed;
+    color: var(--text-main);
+    min-height: 100vh;
+  }
+
+  .container { max-width: 680px; position: relative; z-index: 1; }
+  h1 { color: var(--tie); font-weight: 700; letter-spacing: -0.02em; }
+  .text-sub { color: var(--text-sub) !important; }
+  .text-tie { color: var(--tie) !important; }
+
+  .glass-card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    box-shadow: var(--card-shadow);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-radius: 16px;
+    transition: box-shadow 0.3s ease;
+  }
+
+  .bg-orbs { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; overflow: hidden; z-index: 0; pointer-events: none; }
+  .orb { position: absolute; border-radius: 50%; filter: blur(60px); }
+  .orb-1 { top: -10%; left: -10%; width: 50vw; height: 50vw; background: rgba(45,187,235,0.18); animation: float 20s ease-in-out infinite alternate; }
+  .orb-2 { bottom: -20%; right: -10%; width: 60vw; height: 60vw; background: rgba(240,60,114,0.12); animation: float 25s ease-in-out infinite alternate-reverse; }
+  @keyframes float { 0% { transform: translate(0,0) scale(1); } 100% { transform: translate(5%,10%) scale(1.1); } }
+
+  .btn-ble {
+    background: var(--tie);
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    padding: 0.75rem 1.5rem;
+    font-size: 1rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s;
+    width: 100%;
+  }
+  .btn-ble:hover:not(:disabled) {
+    background: #1aa8d4;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 16px rgba(45,187,235,0.4);
+  }
+  .btn-ble:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .btn-cancel {
+    background: rgba(240,60,114,0.1);
+    color: #f03c72;
+    border: 1px solid rgba(240,60,114,0.3);
+    border-radius: 10px;
+    padding: 0.75rem 1.5rem;
+    font-size: 1rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s;
+    width: 100%;
+  }
+  .btn-cancel:hover { background: rgba(240,60,114,0.2); }
+
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 0.82rem;
+    font-weight: 600;
+  }
+  .status-disconnected { background: rgba(107,117,144,0.12); color: var(--text-sub); }
+  .status-connected { background: rgba(45,187,235,0.15); color: var(--tie); }
+  .status-sending { background: rgba(255,182,0,0.15); color: #b58800; }
+  .status-done { background: rgba(45,200,120,0.15); color: #1a7a50; }
+  .status-error { background: rgba(240,60,114,0.15); color: var(--eye); }
+
+  .pulse { animation: pulse 1.5s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+
+  .progress-bar-wrap {
+    background: rgba(45,187,235,0.1);
+    border-radius: 8px;
+    height: 12px;
+    overflow: hidden;
+    margin-top: 8px;
+  }
+  .progress-bar-inner {
+    height: 100%;
+    background: linear-gradient(90deg, var(--tie), #2DBBEB99);
+    border-radius: 8px;
+    transition: width 0.3s ease;
+  }
+
+  .log-box {
+    background: #0d1117;
+    border: 1px solid rgba(45,187,235,0.2);
+    border-radius: 10px;
+    color: #7dffb3;
+    font-family: 'Cascadia Code', monospace;
+    font-size: 0.78rem;
+    height: 140px;
+    overflow-y: auto;
+    padding: 10px 12px;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  .device-card {
+    background: rgba(45,187,235,0.06);
+    border: 1px solid var(--card-border);
+    border-radius: 10px;
+    padding: 10px 14px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .device-card:hover { background: rgba(45,187,235,0.14); border-color: var(--tie); }
+  .device-card .name { font-weight: 700; color: var(--text-main); }
+  .device-card .id { font-size: 0.76rem; color: var(--text-sub); }
+
+  #notSupportedBanner { display: none; }
+</style>
+</head>
+<body>
+<div class="bg-orbs">
+  <div class="orb orb-1"></div>
+  <div class="orb orb-2"></div>
+</div>
+
+<div class="container py-5">
+  <header class="mb-4 text-center">
+    <div class="text-uppercase text-sub fw-bold" style="font-size:0.8rem;letter-spacing:0.15em;">wireless upload · esp32-2432s028</div>
+    <h1 class="display-6 mt-1">Bluetooth Upload</h1>
+    <p class="text-sub mt-2">Upload a converted <code>video.dat</code> file to your ESP32-2432S028 board wirelessly over BLE.</p>
+  </header>
+
+  <!-- Not Supported Banner -->
+  <div id="notSupportedBanner" class="alert alert-danger mb-4" role="alert">
+    <strong>⚠️ Web Bluetooth Not Supported</strong><br>
+    Your browser doesn't support Web Bluetooth. Please use <strong>Google Chrome</strong> or <strong>Microsoft Edge</strong> on desktop.<br>
+    <small class="text-muted">Also ensure you're running on <code>localhost</code> or <code>https://</code>.</small>
+  </div>
+
+  <div class="glass-card p-4 mb-4">
+    <h5 class="text-uppercase text-tie fw-bold mb-4" style="font-size:0.85rem;letter-spacing:0.1em;">▸ Step 1 — Pick video.dat file</h5>
+    <div class="mb-3">
+      <label class="form-label text-sub fw-medium" for="videoFile">Converted video.dat file (from main page)</label>
+      <input class="form-control" type="file" id="videoFile" accept=".dat" />
+      <small class="text-sub d-block mt-1">Use the main page to convert your video first, then download <code>video.dat</code>.</small>
+    </div>
+    <div id="fileInfo" style="display:none;" class="d-flex align-items-center gap-2 mt-2">
+      <span class="status-badge status-done">✅ File loaded</span>
+      <span id="fileName" class="text-sub" style="font-size:0.85rem;"></span>
+    </div>
+  </div>
+
+  <div class="glass-card p-4 mb-4">
+    <div class="d-flex align-items-center justify-content-between mb-3">
+      <h5 class="text-uppercase text-tie fw-bold mb-0" style="font-size:0.85rem;letter-spacing:0.1em;">▸ Step 2 — Connect to Board</h5>
+      <span id="statusBadge" class="status-badge status-disconnected">⬤ Disconnected</span>
+    </div>
+
+    <div id="scanSection">
+      <p class="text-sub" style="font-size:0.85rem;">Your browser will show a popup asking you to select a Bluetooth device. <strong>Select "BadApple_Studio"</strong> from the list.</p>
+      <button class="btn-ble" id="scanBtn" onclick="scanAndConnect()">🔍 Scan &amp; Connect</button>
+    </div>
+
+    <div id="connectedSection" style="display:none;">
+      <div class="device-card">
+        <span style="font-size:1.4rem;">📡</span>
+        <div>
+          <div class="name" id="connectedName">BadApple_Studio</div>
+          <div class="id" id="connectedId"></div>
+        </div>
+        <span class="ms-auto status-badge status-connected">Connected</span>
+      </div>
+      <button class="btn-cancel mt-2" onclick="disconnect()">✕ Disconnect</button>
+    </div>
+  </div>
+
+  <div class="glass-card p-4 mb-4">
+    <h5 class="text-uppercase text-tie fw-bold mb-3" style="font-size:0.85rem;letter-spacing:0.1em;">▸ Step 3 — Upload</h5>
+
+    <button class="btn-ble mb-3" id="uploadBtn" onclick="uploadFile()" disabled>📤 Upload via Bluetooth</button>
+
+    <div id="progressWrap" style="display:none;">
+      <div class="d-flex justify-content-between mb-1">
+        <small class="text-sub" id="progressLabel">Sending...</small>
+        <small class="text-sub" id="progressPct">0%</small>
+      </div>
+      <div class="progress-bar-wrap">
+        <div class="progress-bar-inner" id="progressBar" style="width:0%;"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="glass-card p-3 mb-4">
+    <h5 class="text-uppercase text-tie fw-bold mb-2" style="font-size:0.8rem;letter-spacing:0.1em;">▸ Transfer Log</h5>
+    <div class="log-box" id="logBox">Waiting...\n</div>
+  </div>
+
+  <footer class="text-center text-sub small mt-2 pb-4">
+    <a href="/" class="text-decoration-none text-tie fw-bold">← Back to main page</a>
+    &nbsp;·&nbsp;
+    <a href="/editor.html" class="text-decoration-none text-sub">Firmware Editor</a>
+  </footer>
+</div>
+
+<script>
+// ── Constants ─────────────────────────────────────────────────────────────────
+const SERVICE_UUID          = '12345678-1234-5678-1234-56789abcdef0';
+const CHARACTERISTIC_UUID   = '12345678-1234-5678-1234-56789abcdef1';
+const STATUS_CHAR_UUID      = '12345678-1234-5678-1234-56789abcdef2';
+const CHUNK_SIZE = 490; // bytes per BLE write (keep under 512 MTU)
+const ACK_TIMEOUT_MS = 2000; // how long to wait for a board status notification
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let bleDevice     = null;
+let bleChar       = null;
+let bleStatusChar = null;
+let fileData      = null;
+let uploadAborted = false;   // set true if the board reports an error mid-transfer
+let pendingAck    = null;    // resolver for the status notification we're waiting on
+
+// ── Elements ──────────────────────────────────────────────────────────────────
+const scanBtn         = document.getElementById('scanBtn');
+const uploadBtn       = document.getElementById('uploadBtn');
+const statusBadge     = document.getElementById('statusBadge');
+const progressWrap    = document.getElementById('progressWrap');
+const progressBar     = document.getElementById('progressBar');
+const progressPct     = document.getElementById('progressPct');
+const progressLabel   = document.getElementById('progressLabel');
+const logBox          = document.getElementById('logBox');
+const scanSection     = document.getElementById('scanSection');
+const connectedSection = document.getElementById('connectedSection');
+
+// ── Web Bluetooth support check ───────────────────────────────────────────────
+if (!navigator.bluetooth) {
+  document.getElementById('notSupportedBanner').style.display = 'block';
+  scanBtn.disabled = true;
+}
+
+// ── File picker ───────────────────────────────────────────────────────────────
+document.getElementById('videoFile').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    fileData = new Uint8Array(ev.target.result);
+    document.getElementById('fileInfo').style.display = 'flex';
+    document.getElementById('fileName').textContent = `${file.name} (${(fileData.length / 1024).toFixed(1)} KB)`;
+    log(`📁 Loaded: ${file.name} — ${fileData.length} bytes`);
+    refreshUploadBtn();
+  };
+  reader.readAsArrayBuffer(file);
+});
+
+// ── Logging ───────────────────────────────────────────────────────────────────
+function log(msg) {
+  logBox.textContent += `[${new Date().toLocaleTimeString()}] ${msg}\n`;
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+// ── Status badge ──────────────────────────────────────────────────────────────
+function setStatus(type, text) {
+  statusBadge.className = `status-badge status-${type}`;
+  statusBadge.textContent = text;
+}
+
+// ── Refresh upload button ──────────────────────────────────────────────────────
+function refreshUploadBtn() {
+  uploadBtn.disabled = !(fileData && bleChar);
+}
+
+// ── Scan & Connect ────────────────────────────────────────────────────────────
+async function scanAndConnect() {
+  try {
+    log('🔍 Scanning for BadApple_Studio...');
+    setStatus('sending', '⬤ Scanning... ');
+    statusBadge.classList.add('pulse');
+
+    bleDevice = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [SERVICE_UUID] }],
+      optionalServices: [SERVICE_UUID]
+    });
+
+    log(`📡 Found: ${bleDevice.name || 'Unknown'} (${bleDevice.id})`);
+    bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+
+    log('🔗 Connecting...');
+    const server  = await bleDevice.gatt.connect();
+    const service = await server.getPrimaryService(SERVICE_UUID);
+    bleChar       = await service.getCharacteristic(CHARACTERISTIC_UUID);
+
+    // Status characteristic reports which storage the board picked (or an
+    // error) — older firmware won't have it, so don't hard-fail if missing.
+    try {
+      bleStatusChar = await service.getCharacteristic(STATUS_CHAR_UUID);
+      await bleStatusChar.startNotifications();
+      bleStatusChar.addEventListener('characteristicvaluechanged', onStatusNotify);
+    } catch (e) {
+      bleStatusChar = null;
+      log('⚠️ Board firmware has no status channel — uploading without storage feedback.');
+    }
+
+    statusBadge.classList.remove('pulse');
+    setStatus('connected', '⬤ Connected');
+    log(`✅ Connected to ${bleDevice.name}`);
+
+    scanSection.style.display = 'none';
+    connectedSection.style.display = 'block';
+    document.getElementById('connectedName').textContent = bleDevice.name || 'BadApple_Studio';
+    document.getElementById('connectedId').textContent = bleDevice.id;
+
+    refreshUploadBtn();
+  } catch (err) {
+    statusBadge.classList.remove('pulse');
+    setStatus('error', '⬤ Error');
+    log(`❌ ${err.message}`);
+  }
+}
+
+// ── Disconnect ────────────────────────────────────────────────────────────────
+function disconnect() {
+  if (bleDevice && bleDevice.gatt.connected) {
+    bleDevice.gatt.disconnect();
+  }
+}
+
+function onDisconnected() {
+  bleChar = null;
+  bleStatusChar = null;
+  settleAck(null); // don't leave uploadFile() hanging on a promise that'll never resolve
+  setStatus('disconnected', '⬤ Disconnected');
+  log('🔌 Device disconnected.');
+  scanSection.style.display = 'block';
+  connectedSection.style.display = 'none';
+  refreshUploadBtn();
+}
+
+// ── Board status notifications ───────────────────────────────────────────────
+// Codes: OK:SPIFFS | OK:SD | OK:DONE | ERROR:NO_SPACE | ERROR:SIZE_MISMATCH |
+//        ERROR:WRITE_FAIL | ERROR:BAD_SIZE
+function onStatusNotify(event) {
+  const msg = new TextDecoder().decode(event.target.value);
+  log(`📶 Board: ${msg}`);
+
+  if (msg === 'OK:SD') {
+    log('💾 File is larger than onboard storage — the board is writing it to the SD card.');
+    progressLabel.textContent = 'Uploading to SD card...';
+  } else if (msg.startsWith('ERROR:')) {
+    uploadAborted = true; // stop the send loop even if no one is currently awaiting an ack
+  }
+
+  settleAck(msg);
+}
+
+function waitForAck() {
+  return Promise.race([
+    new Promise((resolve) => { pendingAck = resolve; }),
+    sleep(ACK_TIMEOUT_MS).then(() => null), // no status channel, or notification lost — proceed optimistically
+  ]);
+}
+
+function settleAck(msg) {
+  if (pendingAck) { pendingAck(msg); pendingAck = null; }
+}
+
+function friendlyUploadError(code) {
+  switch (code) {
+    case 'ERROR:NO_SPACE':
+      return 'Not enough free storage on the board for this file. Insert a microSD card (or free one up) and try again.';
+    case 'ERROR:SIZE_MISMATCH':
+      return 'Transfer incomplete — some data was lost in the air. Move closer to the board and try again.';
+    case 'ERROR:WRITE_FAIL':
+      return 'Storage write failed mid-transfer (card may be full or was removed).';
+    case 'ERROR:BAD_SIZE':
+      return 'Board rejected the file size — please re-convert the video.';
+    default:
+      return code || 'Unknown board error.';
+  }
+}
+
+// ── Upload ────────────────────────────────────────────────────────────────────
+async function uploadFile() {
+  if (!fileData || !bleChar) return;
+
+  uploadBtn.disabled = true;
+  progressWrap.style.display = 'block';
+  setStatus('sending', '⬤ Uploading...');
+  uploadAborted = false;
+  log(`📤 Starting upload: ${fileData.length} bytes in ${Math.ceil(fileData.length / CHUNK_SIZE)} chunks...`);
+
+  const encoder = new TextEncoder();
+
+  try {
+    // Tell the board how big the file is *before* sending any data, so it can
+    // pick SPIFFS vs SD card up front instead of failing partway through.
+    const startAck = bleStatusChar ? waitForAck() : Promise.resolve(null);
+    await bleChar.writeValueWithoutResponse(encoder.encode(`START:${fileData.length}`));
+    const startResult = await startAck;
+    if (startResult && startResult.startsWith('ERROR:')) {
+      throw new Error(friendlyUploadError(startResult));
+    }
+
+    let sent = 0;
+    while (sent < fileData.length) {
+      if (uploadAborted) throw new Error('Board aborted the transfer — check its storage.');
+
+      const chunk = fileData.slice(sent, sent + CHUNK_SIZE);
+      await bleChar.writeValueWithoutResponse(chunk);
+      sent += chunk.byteLength;
+
+      const pct = Math.round((sent / fileData.length) * 100);
+      progressBar.style.width = pct + '%';
+      progressPct.textContent = pct + '%';
+      progressLabel.textContent = `Sending... ${(sent/1024).toFixed(1)} KB / ${(fileData.length/1024).toFixed(1)} KB`;
+
+      // Small delay to avoid overwhelming the BLE buffer
+      await sleep(10);
+    }
+
+    // Send END signal and confirm the board actually got every byte intact
+    const endAck = bleStatusChar ? waitForAck() : Promise.resolve(null);
+    await bleChar.writeValueWithoutResponse(encoder.encode('END'));
+    const endResult = await endAck;
+    if (endResult && endResult.startsWith('ERROR:')) {
+      throw new Error(friendlyUploadError(endResult));
+    }
+
+    setStatus('done', '⬤ Done!');
+    progressLabel.textContent = 'Upload complete!';
+    log(`✅ Upload complete! ${(fileData.length / 1024).toFixed(1)} KB sent.`);
+    log('🎬 Board is now reloading video.dat — watch your display!');
+
+  } catch (err) {
+    setStatus('error', '⬤ Error');
+    log(`❌ Upload failed: ${err.message}`);
+  } finally {
+    uploadBtn.disabled = false;
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+</script>
+</body>
+</html>

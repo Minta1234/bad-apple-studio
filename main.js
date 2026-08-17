@@ -231,8 +231,82 @@ function createWindow() {
     });
   });
 
+  // Web Bluetooth Picker
+  mainWindow.webContents.session.on('select-bluetooth-device', (event, deviceList, callback) => {
+    event.preventDefault();
+
+    if (!deviceList || deviceList.length === 0) {
+      // Just auto cancel if nothing is found to prevent empty dialog
+      // Actually we'll let it open empty so they can see it scanning
+    }
+
+    let pickerWindow = new BrowserWindow({
+      width: 450,
+      height: 400,
+      parent: mainWindow,
+      modal: true,
+      show: false,
+      autoHideMenuBar: true,
+      resizable: false,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        preload: path.join(__dirname, 'preload-picker.js')
+      }
+    });
+
+    pickerWindow.loadFile(path.join(__dirname, 'bluetooth-picker.html'));
+
+    pickerWindow.once('ready-to-show', () => {
+      pickerWindow.show();
+      pickerWindow.webContents.send('picker:bluetooth-devices', deviceList);
+    });
+
+    const onDeviceAdded = (event, device) => {
+      if (!pickerWindow.isDestroyed()) {
+        pickerWindow.webContents.send('picker:bluetooth-device-detected', device);
+      }
+    };
+    
+    // Electron's select-bluetooth-device is continuously called as new devices are found
+    // We update the existing dialog instead of creating a new one
+    mainWindow.webContents.session.on('bluetooth-device-added', onDeviceAdded);
+
+    let handled = false;
+    
+    const onConfirm = (event, deviceId) => {
+      if (event.sender !== pickerWindow.webContents) return;
+      handled = true;
+      callback(deviceId);
+      pickerWindow.close();
+    };
+    
+    const onCancel = (event) => {
+      if (event.sender !== pickerWindow.webContents) return;
+      handled = true;
+      callback('');
+      pickerWindow.close();
+    };
+
+    ipcMain.once('picker:bluetooth-confirm', onConfirm);
+    ipcMain.once('picker:bluetooth-cancel', onCancel);
+
+    pickerWindow.on('closed', () => {
+      ipcMain.removeListener('picker:bluetooth-confirm', onConfirm);
+      ipcMain.removeListener('picker:bluetooth-cancel', onCancel);
+      mainWindow.webContents.session.removeListener('bluetooth-device-added', onDeviceAdded);
+      if (!handled) callback('');
+    });
+  });
+
   mainWindow.webContents.session.setPermissionCheckHandler(() => true);
   mainWindow.webContents.session.setDevicePermissionHandler(() => true);
+  mainWindow.webContents.session.setBluetoothPairingHandler((details, callback) => {
+    callback({
+      pairingKind: 'confirm',
+      pin: details.pin
+    });
+  });
 
   mainWindow.loadURL('http://127.0.0.1:3000');
   mainWindow.on('closed', () => { mainWindow = null; });
