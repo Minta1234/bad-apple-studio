@@ -187,8 +187,15 @@
     </div>
 
     <div id="scanSection">
-      <p class="text-sub" style="font-size:0.85rem;">Your browser will show a popup asking you to select a Bluetooth device. <strong>Select "BadApple_Studio"</strong> from the list.</p>
-      <button class="btn-ble" id="scanBtn" onclick="scanAndConnect()">🔍 Scan &amp; Connect</button>
+      <p class="text-sub" style="font-size:0.85rem;">Click scan to find your ESP32 board. If multiple boards are found, select one from the list below.</p>
+      <button class="btn-ble" id="scanBtn" onclick="scanAndConnect()">🔍 Scan</button>
+      <button class="btn-cancel mt-2" id="cancelScanBtn" onclick="cancelScan()" style="display:none;">✕ Cancel Scan</button>
+      
+      <!-- Device list container -->
+      <div id="deviceList" class="mt-3" style="display:none;">
+        <h6 class="text-sub fw-bold mb-2" style="font-size:0.75rem;">SELECT A DEVICE:</h6>
+        <div id="deviceListContainer"></div>
+      </div>
     </div>
 
     <div id="connectedSection" style="display:none;">
@@ -250,6 +257,7 @@ let pendingAck    = null;    // resolver for the status notification we're waiti
 
 // ── Elements ──────────────────────────────────────────────────────────────────
 const scanBtn         = document.getElementById('scanBtn');
+const cancelScanBtn   = document.getElementById('cancelScanBtn');
 const uploadBtn       = document.getElementById('uploadBtn');
 const statusBadge     = document.getElementById('statusBadge');
 const progressWrap    = document.getElementById('progressWrap');
@@ -259,6 +267,8 @@ const progressLabel   = document.getElementById('progressLabel');
 const logBox          = document.getElementById('logBox');
 const scanSection     = document.getElementById('scanSection');
 const connectedSection = document.getElementById('connectedSection');
+const deviceList      = document.getElementById('deviceList');
+const deviceListContainer = document.getElementById('deviceListContainer');
 
 // ── Web Bluetooth support check ───────────────────────────────────────────────
 if (!navigator.bluetooth) {
@@ -304,11 +314,28 @@ async function scanAndConnect() {
     log('🔍 Scanning for BadApple_Studio...');
     setStatus('sending', '⬤ Scanning... ');
     statusBadge.classList.add('pulse');
+    scanBtn.style.display = 'none';
+    cancelScanBtn.style.display = 'block';
+    
+    // In Electron, we listen for discovered devices and render them
+    if (window.electronBluetooth && !window.electronDevicesListenerAdded) {
+      window.electronBluetooth.onDevicesFound((devices) => {
+        renderDeviceList(devices);
+      });
+      window.electronDevicesListenerAdded = true;
+    }
 
+    // This promise will hang until the user selects a device (or cancels)
+    // The actual selection is handled by window.electronBluetooth.selectDevice()
     bleDevice = await navigator.bluetooth.requestDevice({
-      filters: [{ services: [SERVICE_UUID] }],
+      filters: [{ namePrefix: 'BadApple' }],
       optionalServices: [SERVICE_UUID]
     });
+    
+    // If we get here, a device was selected!
+    deviceList.style.display = 'none';
+    cancelScanBtn.style.display = 'none';
+    scanBtn.style.display = 'block';
 
     log(`📡 Found: ${bleDevice.name || 'Unknown'} (${bleDevice.id})`);
     bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
@@ -343,7 +370,52 @@ async function scanAndConnect() {
     statusBadge.classList.remove('pulse');
     setStatus('error', '⬤ Error');
     log(`❌ ${err.message}`);
+    cancelScanBtn.style.display = 'none';
+    scanBtn.style.display = 'block';
+    deviceList.style.display = 'none';
   }
+}
+
+// ── Custom Device Picker (Electron only) ──────────────────────────────────────
+function renderDeviceList(devices) {
+  if (!devices || devices.length === 0) return;
+  
+  deviceList.style.display = 'block';
+  deviceListContainer.innerHTML = '';
+  
+  devices.forEach(device => {
+    const card = document.createElement('div');
+    card.className = 'device-card';
+    card.innerHTML = `
+      <span style="font-size:1.4rem;">📡</span>
+      <div>
+        <div class="name">${device.deviceName || 'BadApple_Studio'}</div>
+        <div class="id">${device.deviceId}</div>
+      </div>
+      <button class="btn-ble ms-auto" style="width:auto; padding: 0.4rem 1rem; font-size: 0.85rem;" 
+              onclick="selectDevice('${device.deviceId}')">Connect</button>
+    `;
+    deviceListContainer.appendChild(card);
+  });
+}
+
+function selectDevice(deviceId) {
+  if (window.electronBluetooth) {
+    log(`🔗 Selected device ${deviceId}...`);
+    window.electronBluetooth.selectDevice(deviceId);
+  }
+}
+
+function cancelScan() {
+  if (window.electronBluetooth) {
+    window.electronBluetooth.cancelScan();
+  }
+  cancelScanBtn.style.display = 'none';
+  scanBtn.style.display = 'block';
+  deviceList.style.display = 'none';
+  statusBadge.classList.remove('pulse');
+  setStatus('disconnected', '⬤ Disconnected');
+  log('❌ Scan cancelled by user');
 }
 
 // ── Disconnect ────────────────────────────────────────────────────────────────
@@ -430,20 +502,30 @@ async function uploadFile() {
     }
 
     let sent = 0;
+    let retryCount = 0;
+    const MAX_RETRIES = 3;
     while (sent < fileData.length) {
       if (uploadAborted) throw new Error('Board aborted the transfer — check its storage.');
 
       const chunk = fileData.slice(sent, sent + CHUNK_SIZE);
-      await bleChar.writeValueWithoutResponse(chunk);
-      sent += chunk.byteLength;
+      try {
+        await bleChar.writeValueWithoutResponse(chunk);
+        sent += chunk.byteLength;
+        retryCount = 0; // reset on success
 
-      const pct = Math.round((sent / fileData.length) * 100);
-      progressBar.style.width = pct + '%';
-      progressPct.textContent = pct + '%';
-      progressLabel.textContent = `Sending... ${(sent/1024).toFixed(1)} KB / ${(fileData.length/1024).toFixed(1)} KB`;
+        const pct = Math.round((sent / fileData.length) * 100);
+        progressBar.style.width = pct + '%';
+        progressPct.textContent = pct + '%';
+        progressLabel.textContent = `Sending... ${(sent/1024).toFixed(1)} KB / ${(fileData.length/1024).toFixed(1)} KB`;
 
-      // Small delay to avoid overwhelming the BLE buffer
-      await sleep(10);
+        // Delay to avoid overwhelming the ESP32 BLE buffer
+        await sleep(25);
+      } catch (writeErr) {
+        retryCount++;
+        if (retryCount > MAX_RETRIES) throw writeErr;
+        log(`⚠️ Write error, retrying (${retryCount}/${MAX_RETRIES})...`);
+        await sleep(200 * retryCount); // back off: 200ms, 400ms, 600ms
+      }
     }
 
     // Send END signal and confirm the board actually got every byte intact

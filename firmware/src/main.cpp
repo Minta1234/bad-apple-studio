@@ -38,8 +38,36 @@
   #endif
   static U8G2_CLASS u8g2(U8G2_R0, U8X8_PIN_NONE);
 
+#elif defined(DISPLAY_DRIVER_ARDUINO_GFX)
+  #include <Arduino_GFX_Library.h>
+  #ifdef HAS_SD_CARD
+    #include <SD.h>
+  #endif
+  
+  #if defined(GFX_PANEL_4827S043)
+    Arduino_ESP32RGBPanel *rgbpanel = new Arduino_ESP32RGBPanel(
+      40, 41, 39, 42,
+      45, 48, 47, 21, 14,
+      5, 6, 7, 15, 16, 4,
+      8, 3, 46, 9, 1,
+      0, 1, 1, 43,
+      0, 3, 1, 12);
+    Arduino_RGB_Display *gfx = new Arduino_RGB_Display(480, 272, rgbpanel, 0, true);
+  #elif defined(GFX_PANEL_8048S043) || defined(GFX_PANEL_8048S070)
+    Arduino_ESP32RGBPanel *rgbpanel = new Arduino_ESP32RGBPanel(
+      40, 41, 39, 42,
+      14, 21, 47, 48, 45,
+      9, 46, 3, 8, 16, 1,
+      15, 7, 6, 5, 4,
+      0, 30, 4, 16,
+      0, 13, 4, 12);
+    Arduino_RGB_Display *gfx = new Arduino_RGB_Display(800, 480, rgbpanel, 0, true);
+  #else
+    #error "Unknown RGB panel"
+  #endif
+
 #else
-  #error "Define DISPLAY_DRIVER_SSD1306, DISPLAY_DRIVER_SH1106, DISPLAY_DRIVER_U8G2_CUSTOM, or DISPLAY_DRIVER_TFT"
+  #error "Define DISPLAY_DRIVER_SSD1306, DISPLAY_DRIVER_SH1106, DISPLAY_DRIVER_U8G2_CUSTOM, DISPLAY_DRIVER_TFT, or DISPLAY_DRIVER_ARDUINO_GFX"
 #endif
 
 #ifndef I2C_SDA
@@ -106,20 +134,33 @@ static const uint32_t SPIFFS_RESERVE_BYTES = 32UL * 1024;
 #ifdef HAS_SD_CARD
 static const uint32_t SD_RESERVE_BYTES = 64UL * 1024;
 
+#ifndef SD_SCK
+#define SD_SCK 18
+#define SD_MISO 19
+#define SD_MOSI 23
+#define SD_CS 5
+#endif
+
+#if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32S2 || CONFIG_IDF_TARGET_ESP32C3
+static SPIClass sdSPI(FSPI);
+#else
 static SPIClass sdSPI(VSPI);
+#endif
+
 static bool     sdMounted = false;
 
 static bool ensureSDMounted() {
   if (sdMounted) return true;
-  // CYD board: SD and the resistive touch controller share the VSPI bus.
-  // Touch CS must be held high or it will jam SD's MISO line.
+  // Touch CS must be held high or it will jam SD's MISO line on 2.8" CYD.
+#ifndef CONFIG_IDF_TARGET_ESP32S3
   pinMode(33, OUTPUT);
   digitalWrite(33, HIGH);
-  pinMode(5, OUTPUT);
-  digitalWrite(5, HIGH);
+#endif
+  pinMode(SD_CS, OUTPUT);
+  digitalWrite(SD_CS, HIGH);
   delay(50);
-  sdSPI.begin(18, 19, 23, 5); // SCK, MISO, MOSI, SS
-  sdMounted = SD.begin(5, sdSPI, 4000000); // 4MHz: safe, avoids 'cmd:0x00' errors
+  sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
+  sdMounted = SD.begin(SD_CS, sdSPI, 4000000); // 4MHz: safe, avoids 'cmd:0x00' errors
   return sdMounted;
 }
 #endif
@@ -196,9 +237,9 @@ void endVideoReceive(bool aborted) {
 
 
 // Frame buffers — only needed for 1-bit (B&W) display modes.
-// The ILI9341 CYD board uses RGB565 color mode exclusively, so skip these
-// to free ~87KB of precious DRAM (needed by NimBLE stack).
-#ifndef DISPLAY_DRIVER_ILI9341
+// The CYD boards use RGB565 color mode exclusively, so skip these
+// to free precious DRAM (needed by NimBLE stack).
+#if defined(DISPLAY_DRIVER_SSD1306) || defined(DISPLAY_DRIVER_SH1106) || defined(DISPLAY_DRIVER_U8G2_CUSTOM)
 static uint8_t frameBuf[FRAME_BYTES];            // 1-bit packed, LSB-first
 static uint8_t payload[(FRAME_W * FRAME_H) + 16]; // worst-case RLE payload + safety margin
 #endif
@@ -217,7 +258,7 @@ static uint32_t readVarint(const uint8_t* data, size_t len, size_t& idx) {
 }
 
 // ── RLE decoder → frameBuf (1-bit B&W displays only) ────────────────────────
-#ifndef DISPLAY_DRIVER_ILI9341
+#if defined(DISPLAY_DRIVER_SSD1306) || defined(DISPLAY_DRIVER_SH1106) || defined(DISPLAY_DRIVER_U8G2_CUSTOM)
 static void decodeFrame(const uint8_t* pl, size_t plLen) {
   memset(frameBuf, 0, FRAME_BYTES);
   size_t   idx    = 0;
@@ -238,7 +279,7 @@ static void decodeFrame(const uint8_t* pl, size_t plLen) {
 #endif
 
 // ── Read next RLE frame from SPIFFS (1-bit B&W displays only) ────────────────
-#ifndef DISPLAY_DRIVER_ILI9341
+#if defined(DISPLAY_DRIVER_SSD1306) || defined(DISPLAY_DRIVER_SH1106) || defined(DISPLAY_DRIVER_U8G2_CUSTOM)
 static bool readNextFrame1Bit() {
   // If single-frame (static image), only seek back if we haven't drawn it yet
   if (!videoFile.available()) {
@@ -275,37 +316,54 @@ static bool readAndRenderColorFrame() {
     return true; // Skip invalid frames
   }
 
-#if defined(DISPLAY_DRIVER_TFT) || defined(DISPLAY_DRIVER_ILI9341) || defined(DISPLAY_DRIVER_ST7789)
+#if defined(DISPLAY_DRIVER_TFT) || defined(DISPLAY_DRIVER_ILI9341) || defined(DISPLAY_DRIVER_ST7789) || defined(DISPLAY_DRIVER_ARDUINO_GFX)
   uint8_t scale = DISPLAY_W / frameW;
 
+#if !defined(DISPLAY_DRIVER_ARDUINO_GFX)
   tft.startWrite();
+#endif
 
   if (scale <= 1) {
     // Fast path: No scaling needed (fills screen or is larger)
     uint16_t xOffset = (DISPLAY_W > frameW) ? (DISPLAY_W - frameW) / 2 : 0;
     uint16_t yOffset = (DISPLAY_H > frameH) ? (DISPLAY_H - frameH) / 2 : 0;
+    
+#if !defined(DISPLAY_DRIVER_ARDUINO_GFX)
     tft.setAddrWindow(xOffset, yOffset, frameW, frameH);
+#endif
 
     const int linesPerChunk = 10;
-    const int bytesPerChunk = 320 * 2 * linesPerChunk; // fixed max size
-    static uint8_t chunkBuf[320 * 2 * 10]; // static: avoid stack overflow (6400 bytes)
+    const int bytesPerChunk = frameW * 2 * linesPerChunk;
+    // max width 800 * 2 bytes * 10 lines = 16000 bytes
+    static uint8_t chunkBuf[16000]; 
 
     int bytesRemaining = frameLen;
+    int currentY = 0;
     while (bytesRemaining > 0) {
       int toRead = (bytesRemaining < bytesPerChunk) ? bytesRemaining : bytesPerChunk;
       int bytesRead = videoFile.read(chunkBuf, toRead);
       if (bytesRead <= 0) break;
+      
+#if defined(DISPLAY_DRIVER_ARDUINO_GFX)
+      int linesRead = bytesRead / (frameW * 2);
+      gfx->draw16bitRGBBitmap(xOffset, yOffset + currentY, (uint16_t*)chunkBuf, frameW, linesRead);
+      currentY += linesRead;
+#else
       tft.pushColors((uint16_t*)chunkBuf, bytesRead / 2, true);
+#endif
       bytesRemaining -= bytesRead;
     }
   } else {
     // Upscale path: Scale integer times to fill the screen
+#if !defined(DISPLAY_DRIVER_ARDUINO_GFX)
     tft.setAddrWindow(0, 0, DISPLAY_W, DISPLAY_H);
+#endif
     
     const int bytesPerRow = frameW * 2;
-    static uint8_t rowBuf[320 * 2];      // static: avoid stack overflow
-    static uint16_t upscaledRow[DISPLAY_W]; // static: avoid stack overflow
+    static uint8_t rowBuf[1600];      // max frameW ~800 * 2
+    static uint16_t upscaledRow[800]; // max DISPLAY_W 800
     
+    int currentY = 0;
     for (uint16_t y = 0; y < frameH; y++) {
       if (videoFile.read(rowBuf, bytesPerRow) != bytesPerRow) break;
       
@@ -322,12 +380,18 @@ static bool readAndRenderColorFrame() {
       
       // Push the duplicated line vertically 'scale' times
       for (uint8_t s = 0; s < scale; s++) {
+#if defined(DISPLAY_DRIVER_ARDUINO_GFX)
+        gfx->draw16bitRGBBitmap(0, currentY++, upscaledRow, DISPLAY_W, 1);
+#else
         tft.pushColors(upscaledRow, DISPLAY_W, true);
+#endif
       }
     }
   }
   
+#if !defined(DISPLAY_DRIVER_ARDUINO_GFX)
   tft.endWrite();
+#endif
 #else
   // Skip if display doesn't support color
   videoFile.seek(videoFile.position() + frameLen);
@@ -337,7 +401,7 @@ static bool readAndRenderColorFrame() {
 }
 
 // ── Render frameBuf to display (for 1-bit mode) ───────────────────────────────
-#ifndef DISPLAY_DRIVER_ILI9341
+#if defined(DISPLAY_DRIVER_SSD1306) || defined(DISPLAY_DRIVER_SH1106) || defined(DISPLAY_DRIVER_U8G2_CUSTOM)
 static void renderFrame1Bit() {
 #if defined(DISPLAY_DRIVER_TFT) || defined(DISPLAY_DRIVER_ST7789)
   static uint16_t lineBuf[FRAME_W];
@@ -372,6 +436,9 @@ void setup() {
     pinMode(TFT_BL, OUTPUT);
     digitalWrite(TFT_BL, HIGH); // backlight on
   #endif
+#elif defined(DISPLAY_DRIVER_ARDUINO_GFX)
+  gfx->begin();
+  gfx->fillScreen(BLACK);
 #else
   Wire.begin(I2C_SDA, I2C_SCL);
   u8g2.begin();
@@ -447,7 +514,7 @@ void loop() {
       Serial.printf("FRAME:%u/%u\n", currentFrame, header.frameCount);
     }
   } else {
-#ifndef DISPLAY_DRIVER_ILI9341
+#if defined(DISPLAY_DRIVER_SSD1306) || defined(DISPLAY_DRIVER_SH1106) || defined(DISPLAY_DRIVER_U8G2_CUSTOM)
     if (!readNextFrame1Bit()) {
       currentFrame = 0; // Reset on loop/end
       return;

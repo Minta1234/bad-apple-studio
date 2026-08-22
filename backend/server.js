@@ -141,8 +141,8 @@ app.use((err, req, res, next) => {
   res.status(400).json({ error: err.message || 'Error' });
 });
 
-const PORT = 3000;
-const HOST = '127.0.0.1';
+const PORT = 4005;
+const HOST = 'localhost';
 
 const server = app.listen(PORT, HOST, () => {
   console.log(`Bad Apple Studio: http://${HOST}:${PORT}`);

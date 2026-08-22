@@ -1,6 +1,6 @@
 {
   "name": "bad-apple-studio",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Run entirely locally: Upload video → Backend converts/compresses into 1-bit frame data → Compile firmware based on chosen display (0.96\" SSD1306 or 1.3\" SH1106) → Generate LittleFS image → Web flasher interface (esp-web-tools) flashes directly via USB.",
   "main": "main.js",
   "scripts": {
@@ -20,6 +20,7 @@
     },
     "files": [
       "main.js",
+      "preload.js",
       "preload-picker.js",
       "port-picker.html",
       "bluetooth-picker.html",

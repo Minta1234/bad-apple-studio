@@ -38,7 +38,7 @@ You need 4 tools before running or building the app: **Node.js**, **Python** (Pl
 ### Windows — one-shot install
 
 ```bat
-install.bat
+install lib.bat
 ```
 
 Checks each tool, installs whatever's missing via `winget`, then runs `npm install`. If it installs Node.js/Python/ffmpeg for the first time, Windows won't expose them on `PATH` until you open a **new** terminal.

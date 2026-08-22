@@ -69,7 +69,7 @@ function getEnvironments() {
 
       // Detect color display
       const lower = trimmed.toLowerCase();
-      if (lower.includes('tft') || lower.includes('ili9341') || lower.includes('st7789') || lower.includes('color')) {
+      if (lower.includes('tft') || lower.includes('ili9341') || lower.includes('st7789') || lower.includes('color') || lower.includes('arduino_gfx')) {
         currentEnv.isColor = true;
       }
       

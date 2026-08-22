@@ -132,6 +132,7 @@ popd
 echo.
 echo ================================================
 echo  Install complete.
-echo  Run run.bat to start the Bad Apple Studio app.
+echo  Run Build.bat to Build the App.
+echo  Then run Run.bat to start the Bad Apple Studio app.
 echo ================================================
 pause

@@ -6,3 +6,8 @@ contextBridge.exposeInMainWorld('portPicker', {
   confirm:          (portId) => ipcRenderer.send('picker:confirm', portId),
   cancel:           () => ipcRenderer.send('picker:cancel'),
 });
+contextBridge.exposeInMainWorld('electronBluetooth', {
+  onDevicesFound:   (cb) => ipcRenderer.on('bluetooth-devices-found', (_, devices) => cb(devices)),
+  selectDevice:     (deviceId) => ipcRenderer.send('bluetooth-device-selected', deviceId),
+  cancelScan:       () => ipcRenderer.send('bluetooth-scan-cancelled'),
+});

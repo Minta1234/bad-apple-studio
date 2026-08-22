@@ -37,13 +37,40 @@ function getSpiffsMaxBytes() {
   return 1966080; // fallback: 2.68MB × 0.75
 }
 
-// Partition offsets must match firmware/partitions.csv exactly
+// app/partitions/spiffs offsets come from firmware/partitions.csv and are
+// identical across every Espressif chip — only the bootloader load address
+// differs per silicon family, so that one has to be resolved per-board.
 const PART_OFFSETS = {
-  bootloader: 4096,      // 0x1000
   partitions: 32768,     // 0x8000
   firmware:   65536,     // 0x10000
   spiffs:     1441792,   // 0x160000
 };
+
+// Maps the `board =` value from platformio.ini -> esp-web-tools chipFamily
+// + bootloader flash offset. esp-web-tools refuses to install a manifest
+// whose chipFamily doesn't match what it reads back from the connected
+// chip, and a wrong bootloader offset produces a device that won't boot
+// even if the flash "succeeds" — so both must be derived per-env, never
+// hardcoded to classic ESP32 values.
+// Ref: https://docs.espressif.com/projects/esptool/en/latest/esp32s3/advanced-topics/firmware-image-format.html
+const CHIP_INFO = {
+  esp32dev:             { chipFamily: 'ESP32',    bootloaderOffset: 0x1000 },
+  'esp32s3box':         { chipFamily: 'ESP32-S3', bootloaderOffset: 0x0    },
+  'lolin_s3_mini':      { chipFamily: 'ESP32-S3', bootloaderOffset: 0x0    },
+  'esp32-s3-devkitc-1': { chipFamily: 'ESP32-S3', bootloaderOffset: 0x0    },
+  'esp32-c3-devkitm-1': { chipFamily: 'ESP32-C3', bootloaderOffset: 0x0    },
+  'esp32-s2-saola-1':   { chipFamily: 'ESP32-S2', bootloaderOffset: 0x1000 },
+};
+
+function getChipInfo(board) {
+  const info = CHIP_INFO[board];
+  if (!info) {
+    // Fail loudly instead of silently flashing wrong offsets to an
+    // unmapped board — add the board to CHIP_INFO instead of relaxing this.
+    throw new Error(`Unknown platformio board "${board}" — add it to CHIP_INFO in convert.js`);
+  }
+  return info;
+}
 
 const upload = multer({
   storage: multer.diskStorage({
@@ -84,6 +111,13 @@ router.post('/convert', assignJobId, upload.single('video'), async (req, res) =>
     return res.status(400).json({ error: `display must be a valid environment from platformio.ini` });
   }
 
+  let chipInfo;
+  try {
+    chipInfo = getChipInfo(envConfig.board);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+
   const fps       = clampInt(req.body.fps,       1,   30,  12);
   const threshold = clampInt(req.body.threshold,  0,  255, 128);
   const invert    = req.body.invert === 'true' || req.body.invert === true;
@@ -102,12 +136,30 @@ router.post('/convert', assignJobId, upload.single('video'), async (req, res) =>
   let H = envConfig.height;
 
   createJob(jobId);
+  updateJob(jobId, { chipFamily: chipInfo.chipFamily, bootloaderOffset: chipInfo.bootloaderOffset });
   res.status(202).json({ jobId });
 
   // Process in background so we don't block the HTTP response (firmware compile can take minutes)
   processJob(jobId, req.file.path, { env: displayEnv, fps, threshold, invert, isColor, forSdCard, rotation, zoom, panX, panY, width: W, height: H }).catch((err) => {
     updateJob(jobId, { status: 'error', error: err.message });
   });
+});
+
+router.delete('/clear', (req, res) => {
+  try {
+    const jobs = fs.readdirSync(JOBS_ROOT);
+    let deletedCount = 0;
+    for (const job of jobs) {
+      const jobPath = path.join(JOBS_ROOT, job);
+      if (fs.lstatSync(jobPath).isDirectory()) {
+        fs.rmSync(jobPath, { recursive: true, force: true });
+        deletedCount++;
+      }
+    }
+    res.json({ success: true, deleted: deletedCount });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to clear jobs', details: err.message });
+  }
 });
 
 router.get('/:id', (req, res) => {
@@ -126,9 +178,9 @@ router.get('/:id/manifest.json', (req, res) => {
     version: '1.0.0',
     builds: [
       {
-        chipFamily: 'ESP32',
+        chipFamily: job.chipFamily,
         parts: [
-          { path: `files/bootloader.bin`, offset: PART_OFFSETS.bootloader },
+          { path: `files/bootloader.bin`, offset: job.bootloaderOffset },
           { path: `files/partitions.bin`, offset: PART_OFFSETS.partitions },
           { path: `files/firmware.bin`,   offset: PART_OFFSETS.firmware   },
           { path: `files/spiffs.bin`,     offset: PART_OFFSETS.spiffs     },

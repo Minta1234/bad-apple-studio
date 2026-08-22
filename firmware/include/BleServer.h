@@ -1,7 +1,10 @@
 #pragma once
 #include <Arduino.h>
 #include <SPIFFS.h>
-#include <NimBLEDevice.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
 #include <cstdlib>
 
 #define SERVICE_UUID          "12345678-1234-5678-1234-56789abcdef0"
@@ -17,44 +20,38 @@ extern bool     beginVideoReceive(uint32_t expectedBytes);
 extern void     endVideoReceive(bool aborted);
 extern bool     uploadTargetIsSD();
 
-static NimBLECharacteristic* pStatusChar = nullptr;
+static BLECharacteristic* pStatusChar = nullptr;
 
 // Push a short status code to the web app over the NOTIFY characteristic.
-// The write characteristic is WRITE-only (fire-and-forget from the browser's
-// side), so this is the only channel the board has to report back which
-// storage it picked, or that the transfer needs to be retried/aborted.
 static void notifyStatus(const char* msg) {
   if (!pStatusChar) return;
-  pStatusChar->setValue((const uint8_t*)msg, strlen(msg));
+  pStatusChar->setValue((uint8_t*)msg, strlen(msg));
   pStatusChar->notify();
 }
 
-class ServerCallbacks: public NimBLEServerCallbacks {
-    void onConnect(NimBLEServer* pServer) override {
+class ServerCallbacks: public BLEServerCallbacks {
+    void onConnect(BLEServer* pServer) override {
         Serial.println("BLE Client Connected");
     }
-    void onDisconnect(NimBLEServer* pServer) override {
+    void onDisconnect(BLEServer* pServer) override {
         Serial.println("BLE Client Disconnected");
         if (isReceivingVideo) {
-            // Client dropped mid-transfer — discard the partial file rather than
-            // leaving a truncated video.dat that would corrupt playback, and
-            // rather than leaving the File handle open across the next mount.
             Serial.println("BLE: disconnected mid-transfer — discarding partial file");
             endVideoReceive(true);
         }
-        NimBLEDevice::startAdvertising();
+        // Delay before restarting advertising to allow the ESP32 BLE stack to fully clean up
+        // the previous connection. Without this, startAdvertising() can fail silently.
+        delay(500);
+        pServer->startAdvertising();
     }
 };
 
-class CharacteristicCallbacks: public NimBLECharacteristicCallbacks {
-    void onWrite(NimBLECharacteristic* pCharacteristic) override {
+class CharacteristicCallbacks: public BLECharacteristicCallbacks {
+    void onWrite(BLECharacteristic* pCharacteristic) override {
         std::string rxValue = pCharacteristic->getValue();
         if (rxValue.empty()) return;
 
         if (rxValue.rfind("START:", 0) == 0) {
-            // Protocol: "START:<expectedByteCount>" — the board must know the
-            // size up front to decide SPIFFS vs SD *before* any data arrives,
-            // instead of failing partway through a write.
             uint32_t expectedBytes = (uint32_t)strtoul(rxValue.c_str() + 6, nullptr, 10);
             if (expectedBytes == 0) {
                 Serial.println("BLE: START with invalid/zero size");
@@ -87,8 +84,6 @@ class CharacteristicCallbacks: public NimBLECharacteristicCallbacks {
                 size_t written = videoFile.write((const uint8_t*)rxValue.data(), rxValue.length());
                 receivedUploadBytes += written;
                 if (written != rxValue.length()) {
-                    // Storage went away or filled up mid-transfer (e.g. SD card
-                    // pulled, or our pre-check was racing another writer).
                     Serial.println("BLE: write failed mid-transfer — aborting");
                     endVideoReceive(true);
                     notifyStatus("ERROR:WRITE_FAIL");
@@ -99,31 +94,35 @@ class CharacteristicCallbacks: public NimBLECharacteristicCallbacks {
 };
 
 void setupBLE() {
-    NimBLEDevice::init("BadApple_Studio");
-    // Increase MTU to max for faster transfers
-    NimBLEDevice::setMTU(512);
+    BLEDevice::init("BadApple_Studio");
+    BLEDevice::setMTU(512);
 
-    NimBLEServer* pServer = NimBLEDevice::createServer();
+    BLEServer* pServer = BLEDevice::createServer();
     pServer->setCallbacks(new ServerCallbacks());
 
-    NimBLEService* pService = pServer->createService(SERVICE_UUID);
+    BLEService* pService = pServer->createService(SERVICE_UUID);
 
-    NimBLECharacteristic* pCharacteristic = pService->createCharacteristic(
+    BLECharacteristic* pCharacteristic = pService->createCharacteristic(
                                          CHARACTERISTIC_UUID,
-                                         NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR
+                                         BLECharacteristic::PROPERTY_WRITE |
+                                         BLECharacteristic::PROPERTY_WRITE_NR
                                        );
     pCharacteristic->setCallbacks(new CharacteristicCallbacks());
 
     pStatusChar = pService->createCharacteristic(
                                          STATUS_CHARACTERISTIC_UUID,
-                                         NIMBLE_PROPERTY::NOTIFY
+                                         BLECharacteristic::PROPERTY_NOTIFY
                                        );
+    // NOTIFY requires a BLE2902 descriptor for the client to subscribe
+    pStatusChar->addDescriptor(new BLE2902());
 
     pService->start();
 
-    NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
-    pAdvertising->addServiceUUID(SERVICE_UUID);
+    BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
     pAdvertising->setScanResponse(true);
-    pAdvertising->start();
+    // Helps with iPhone/iOS connections
+    pAdvertising->setMinPreferred(0x06);
+    pAdvertising->setMinPreferred(0x12);
+    BLEDevice::startAdvertising();
     Serial.println("BLE Server started. Waiting for connections...");
 }

@@ -1,2 +1,2 @@
-@echo off 
-npm start
+@echo off
+call npm start

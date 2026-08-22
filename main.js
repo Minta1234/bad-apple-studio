@@ -3,6 +3,9 @@ const path = require('path');
 const http = require('http');
 const { execSync, spawn } = require('child_process');
 
+// Enable Web Bluetooth
+app.commandLine.appendSwitch('enable-web-bluetooth', true);
+
 let mainWindow;
 
 // ── Dependency definitions ────────────────────────────────────────────────────
@@ -33,8 +36,7 @@ async function installDep(dep) {
   return new Promise((resolve) => {
     // Spawn a visible console window so the user can see progress
     const proc = spawn(cmd, args, {
-      stdio: 'inherit',
-      shell: true,
+      shell: false,
       windowsHide: false,
     });
     proc.on('close', (code) => resolve(code === 0));
@@ -100,7 +102,7 @@ function startBackend() {
       // Wait for the backend to be healthy
       let retries = 0;
       const checkHealth = () => {
-        http.get('http://127.0.0.1:3000/api/health', (res) => {
+        http.get('http://localhost:4005/api/health', (res) => {
           if (res.statusCode === 200) {
             console.log('Backend is ready!');
             resolve();
@@ -140,7 +142,37 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js')
     },
+  });
+
+  // ── Cancel stuck esp-web-tools dialog with Escape ─────────────────────────
+  // showModal() makes the entire page inert, so normal DOM event listeners
+  // can't receive clicks or keystrokes.  `before-input-event` fires at the
+  // Chromium compositor level BEFORE inertness is applied, so it always works.
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.key === 'Escape' && input.type === 'keyDown') {
+      mainWindow.webContents.executeJavaScript(`
+        (function() {
+          const ewt = document.querySelector('ewt-install-dialog');
+          if (ewt) {
+            // Try the component's own close method first (properly releases serial port)
+            if (typeof ewt._closeDialog === 'function') {
+              ewt._closeDialog();
+            } else {
+              // Dispatch 'closed' event so install-button.js calls port.close()
+              ewt.dispatchEvent(new CustomEvent('closed', { bubbles: true, composed: true }));
+              ewt.remove();
+            }
+            document.body.style.overflow = '';
+            return true;
+          }
+          return false;
+        })();
+      `).then(removed => {
+        if (removed) event.preventDefault();
+      }).catch(() => {});
+    }
   });
 
   // Show a native port picker dialog instead of auto-selecting
@@ -231,84 +263,41 @@ function createWindow() {
     });
   });
 
-  // Web Bluetooth Picker
-  mainWindow.webContents.session.on('select-bluetooth-device', (event, deviceList, callback) => {
-    event.preventDefault();
+  let bluetoothResolve = null;
+  let activeDeviceListSnapshot = []; // tied to the current callback only
 
-    if (!deviceList || deviceList.length === 0) {
-      // Just auto cancel if nothing is found to prevent empty dialog
-      // Actually we'll let it open empty so they can see it scanning
+  mainWindow.webContents.on('select-bluetooth-device', (event, deviceList, callback) => {
+    event.preventDefault();
+    if (deviceList.length > 0) {
+      console.log('[BLE] First device raw data:', JSON.stringify(deviceList[0]));
     }
 
-    let pickerWindow = new BrowserWindow({
-      width: 450,
-      height: 400,
-      parent: mainWindow,
-      modal: true,
-      show: false,
-      autoHideMenuBar: true,
-      resizable: false,
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-        preload: path.join(__dirname, 'preload-picker.js')
-      }
-    });
-
-    pickerWindow.loadFile(path.join(__dirname, 'bluetooth-picker.html'));
-
-    pickerWindow.once('ready-to-show', () => {
-      pickerWindow.show();
-      pickerWindow.webContents.send('picker:bluetooth-devices', deviceList);
-    });
-
-    const onDeviceAdded = (event, device) => {
-      if (!pickerWindow.isDestroyed()) {
-        pickerWindow.webContents.send('picker:bluetooth-device-detected', device);
-      }
-    };
-    
-    // Electron's select-bluetooth-device is continuously called as new devices are found
-    // We update the existing dialog instead of creating a new one
-    mainWindow.webContents.session.on('bluetooth-device-added', onDeviceAdded);
-
-    let handled = false;
-    
-    const onConfirm = (event, deviceId) => {
-      if (event.sender !== pickerWindow.webContents) return;
-      handled = true;
-      callback(deviceId);
-      pickerWindow.close();
-    };
-    
-    const onCancel = (event) => {
-      if (event.sender !== pickerWindow.webContents) return;
-      handled = true;
-      callback('');
-      pickerWindow.close();
-    };
-
-    ipcMain.once('picker:bluetooth-confirm', onConfirm);
-    ipcMain.once('picker:bluetooth-cancel', onCancel);
-
-    pickerWindow.on('closed', () => {
-      ipcMain.removeListener('picker:bluetooth-confirm', onConfirm);
-      ipcMain.removeListener('picker:bluetooth-cancel', onCancel);
-      mainWindow.webContents.session.removeListener('bluetooth-device-added', onDeviceAdded);
-      if (!handled) callback('');
-    });
+    bluetoothResolve = callback;         // only the latest callback is valid
+    activeDeviceListSnapshot = deviceList;
+    if (!mainWindow.isDestroyed() && mainWindow.webContents) {
+      mainWindow.webContents.send('bluetooth-devices-found', deviceList);
+    }
   });
 
-  mainWindow.webContents.session.setPermissionCheckHandler(() => true);
-  mainWindow.webContents.session.setDevicePermissionHandler(() => true);
-  mainWindow.webContents.session.setBluetoothPairingHandler((details, callback) => {
-    callback({
-      pairingKind: 'confirm',
-      pin: details.pin
-    });
+  ipcMain.on('bluetooth-device-selected', (event, deviceId) => {
+    if (!bluetoothResolve) return; // old request or already auto-selected
+    const stillValid = activeDeviceListSnapshot.some(d => d.deviceId === deviceId);
+    if (!stillValid) return; // prevent ID from an old snapshot
+    console.log('[BLE] Web page selected device:', deviceId);
+    bluetoothResolve(deviceId);
+    bluetoothResolve = null;
   });
 
-  mainWindow.loadURL('http://127.0.0.1:3000');
+  ipcMain.on('bluetooth-scan-cancelled', (event) => {
+    if (bluetoothResolve) {
+      console.log('[BLE] Web page cancelled scan');
+      bluetoothResolve('');
+      bluetoothResolve = null;
+      activeDeviceListSnapshot = [];
+    }
+  });
+
+  mainWindow.loadURL('http://localhost:4005');
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 

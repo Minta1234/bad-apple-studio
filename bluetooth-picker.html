@@ -122,7 +122,7 @@
 </head>
 <body>
   <div id="header">
-    <h2 id="origin-label">http://127.0.0.1:3000</h2>
+    <h2 id="origin-label">http://localhost:4005</h2>
     <p id="subtitle">wants to pair with a Bluetooth device</p>
   </div>
 
@@ -149,6 +149,9 @@
         empty.style.display = 'block';
         return;
       }
+
+      list.style.display = 'block';
+      empty.style.display = 'none';
 
       devices.forEach((device, i) => {
         const name = device.deviceName || device.deviceId || 'Unknown Device';
