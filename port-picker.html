@@ -1,9 +1,15 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
     body {
       font-family: "Segoe UI", Arial, sans-serif;
       background: #fff;
@@ -19,12 +25,14 @@
       padding: 20px 24px 12px;
       border-bottom: 1px solid #e0e0e0;
     }
+
     #header h2 {
       font-size: 14px;
       font-weight: 500;
       color: #1a73e8;
       margin-bottom: 4px;
     }
+
     #header p {
       font-size: 13px;
       color: #5f6368;
@@ -38,6 +46,7 @@
       margin: 16px 24px;
       border-radius: 4px;
     }
+
     .port-item {
       display: flex;
       align-items: center;
@@ -47,19 +56,43 @@
       border-bottom: 1px solid #f1f3f4;
       transition: background 0.1s;
     }
-    .port-item:last-child { border-bottom: none; }
-    .port-item:hover { background: #f8f9fa; }
-    .port-item.selected { background: #e8f0fe; }
+
+    .port-item:last-child {
+      border-bottom: none;
+    }
+
+    .port-item:hover {
+      background: #f8f9fa;
+    }
+
+    .port-item.selected {
+      background: #e8f0fe;
+    }
 
     .port-item input[type="radio"] {
       accent-color: #1a73e8;
-      width: 16px; height: 16px;
+      width: 16px;
+      height: 16px;
       cursor: pointer;
       flex-shrink: 0;
     }
-    .port-info { flex: 1; }
-    .port-name { font-size: 13px; color: #202124; font-weight: 500; }
-    .port-com  { font-size: 12px; color: #5f6368; margin-top: 1px; }
+
+    .port-info {
+      flex: 1;
+    }
+
+    .port-name {
+      font-size: 13px;
+      color: #202124;
+      font-weight: 500;
+    }
+
+    .port-com {
+      font-size: 12px;
+      color: #5f6368;
+      margin-top: 1px;
+    }
+
     .port-paired {
       font-size: 11px;
       color: #1a73e8;
@@ -86,6 +119,7 @@
       gap: 8px;
       border-top: 1px solid #e0e0e0;
     }
+
     button {
       padding: 8px 20px;
       border-radius: 4px;
@@ -95,18 +129,32 @@
       border: none;
       transition: background 0.15s, box-shadow 0.15s;
     }
+
     #btn-cancel {
       background: transparent;
       color: #1a73e8;
       border: 1px solid transparent;
     }
-    #btn-cancel:hover { background: #e8f0fe; }
+
+    #btn-cancel:hover {
+      background: #e8f0fe;
+    }
+
     #btn-connect {
       background: #1a73e8;
       color: #fff;
     }
-    #btn-connect:hover:not(:disabled) { background: #1557b0; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
-    #btn-connect:disabled { background: #dadce0; color: #80868b; cursor: default; }
+
+    #btn-connect:hover:not(:disabled) {
+      background: #1557b0;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    }
+
+    #btn-connect:disabled {
+      background: #dadce0;
+      color: #80868b;
+      cursor: default;
+    }
 
     /* Help icon */
     #help {
@@ -117,9 +165,13 @@
       font-size: 18px;
       cursor: pointer;
     }
-    #help:hover { color: #1a73e8; }
+
+    #help:hover {
+      color: #1a73e8;
+    }
   </style>
 </head>
+
 <body>
   <div id="header">
     <h2 id="origin-label">http://localhost:4005</h2>
@@ -152,7 +204,7 @@
 
       ports.forEach((port, i) => {
         const name = port.displayName || port.portName || 'Unknown Device';
-        const com  = port.portId || '';
+        const com = port.portId || '';
         const isPaired = port.paired;
 
         const isSelected = port.portId === selectedPortId;
@@ -214,4 +266,5 @@
     });
   </script>
 </body>
+
 </html>

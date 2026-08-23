@@ -98,7 +98,7 @@ function startBackend() {
     try {
       console.log('Starting backend server directly within Electron main process...');
       require('./backend/server.js');
-      
+
       // Wait for the backend to be healthy
       let retries = 0;
       const checkHealth = () => {
@@ -171,7 +171,7 @@ function createWindow() {
         })();
       `).then(removed => {
         if (removed) event.preventDefault();
-      }).catch(() => {});
+      }).catch(() => { });
     }
   });
 
@@ -236,14 +236,14 @@ function createWindow() {
     mainWindow.webContents.session.on('serial-port-removed', onPortRemoved);
 
     let handled = false;
-    
+
     const onConfirm = (event, portId) => {
       if (event.sender !== pickerWindow.webContents) return;
       handled = true;
       callback(portId);
       pickerWindow.close();
     };
-    
+
     const onCancel = (event) => {
       if (event.sender !== pickerWindow.webContents) return;
       handled = true;
