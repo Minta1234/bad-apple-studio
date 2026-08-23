@@ -30,11 +30,11 @@ function getSpiffsMaxBytes() {
       const parts = trimmed.split(',').map(s => s.trim());
       if (parts[0] === 'spiffs') {
         const size = parseInt(parts[4], 16);
-        if (!isNaN(size)) return Math.floor(size * 0.75); // 75% to account for mkspiffs overhead
+        if (!isNaN(size)) return Math.floor(size * 0.65); // 65% to account for mkspiffs overhead
       }
     }
   } catch (_) {}
-  return 1966080; // fallback: 2.68MB × 0.75
+  return 1746534; // fallback: 2.68MB × 0.65
 }
 
 // app/partitions/spiffs offsets come from firmware/partitions.csv and are
@@ -239,19 +239,23 @@ async function processJob(jobId, uploadedVideoPath, { env, fps, threshold, inver
     } else {
       // Dynamically read the actual SPIFFS partition size from partitions.csv
       const MAX_SPIFFS_SIZE = getSpiffsMaxBytes();
+      const HEADER_OVERHEAD = 16;         // packFramesColor header
+      const PER_FRAME_LEN_PREFIX = 4;     // uint32 length prefix per frame
 
       if (totalFrames > 0) {
         const bytesPerPixel = 2; // RGB565
         let effectiveFps = fps;
         let fitted = false;
 
+        // Helper: compute actual video.dat size including pack overhead
+        const estimateSize = (w, h, nFrames) =>
+          HEADER_OVERHEAD + nFrames * (PER_FRAME_LEN_PREFIX + w * h * bytesPerPixel);
+
         // First try: reduce FPS slightly (down to half) before sacrificing resolution
         for (let tryFps = fps; tryFps >= Math.max(1, Math.floor(fps / 2)); tryFps--) {
           const tryFrames = Math.ceil(duration * tryFps);
           if (tryFrames <= 0) continue;
-          const maxBytesPerFrame = MAX_SPIFFS_SIZE / tryFrames;
-          const maxPixels = maxBytesPerFrame / bytesPerPixel;
-          if ((W * H) <= maxPixels) {
+          if (estimateSize(W, H, tryFrames) <= MAX_SPIFFS_SIZE) {
             effectiveFps = tryFps;
             fitted = true;
             if (tryFps !== fps) {
@@ -263,17 +267,16 @@ async function processJob(jobId, uploadedVideoPath, { env, fps, threshold, inver
 
         // Second try: reduce resolution by scale factors
         if (!fitted) {
-          const tryFrames = Math.ceil(duration * Math.max(1, Math.floor(fps / 2)));
-          const maxBytesPerFrame = tryFrames > 0 ? MAX_SPIFFS_SIZE / tryFrames : MAX_SPIFFS_SIZE;
-          const maxPixels = maxBytesPerFrame / bytesPerPixel;
+          const halfFps = Math.max(1, Math.floor(fps / 2));
+          const tryFrames = Math.ceil(duration * halfFps);
           const SCALES = [2, 4, 5, 8, 10];
           for (const scale of SCALES) {
             const testW = Math.floor(W / scale);
             const testH = Math.floor(H / scale);
-            if ((testW * testH) <= maxPixels) {
+            if (estimateSize(testW, testH, tryFrames) <= MAX_SPIFFS_SIZE) {
               W = testW;
               H = testH;
-              effectiveFps = Math.max(1, Math.floor(fps / 2));
+              effectiveFps = halfFps;
               fitted = true;
               updateJob(jobId, { progress: `Auto-scaled to ${W}x${H} @${effectiveFps}fps to fit SPIFFS (${(MAX_SPIFFS_SIZE/1024).toFixed(0)}KB available).` });
               break;
@@ -299,7 +302,23 @@ async function processJob(jobId, uploadedVideoPath, { env, fps, threshold, inver
     const frames = await extractFrames(uploadedVideoPath, framesDir, { fps, width: W, height: H, isImage, duration, rotation, zoom, panX, panY });
 
     updateJob(jobId, { status: 'packing', progress: `RLE-encoding ${frames.length} frames...` });
-    packFrames(frames, videoDatPath, { width: W, height: H, fps, threshold, invert });
+    const { headerBytes, payloadBytes } = packFrames(frames, videoDatPath, { width: W, height: H, fps, threshold, invert });
+
+    // RLE output size is data-dependent (depends on how much each frame
+    // changes/contrasts), so it can't be predicted before encoding the way
+    // the raw RGB565 color path can. Check AFTER encoding instead, and fail
+    // fast with an actionable message rather than letting `pio run -t
+    // buildfs` crash later with a raw mkspiffs SPIFFS_write(-10001) error.
+    const MAX_SPIFFS_SIZE = getSpiffsMaxBytes();
+    const totalBytes = headerBytes + payloadBytes;
+    if (totalBytes > MAX_SPIFFS_SIZE) {
+      fs.rmSync(videoDatPath, { force: true });
+      throw new Error(
+        `Encoded video is ${(totalBytes / 1024).toFixed(0)}KB, which exceeds the SPIFFS partition ` +
+        `(${(MAX_SPIFFS_SIZE / 1024).toFixed(0)}KB usable). Lower the FPS, raise the threshold ` +
+        `contrast (fewer RLE run breaks), shorten the clip, or use a HAS_SD_CARD env with forSdCard.`
+      );
+    }
   }
 
   // Clean up temporary files to save disk space
