@@ -13,5 +13,4 @@ call pio run -e ESP32-4827S043 -d firmware
 call pio run -e ESP32-8048S043 -d firmware
 call pio run -e ESP32-8048S070 -d firmware
 
-
 echo Build Complete!

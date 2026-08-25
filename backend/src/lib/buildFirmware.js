@@ -108,18 +108,25 @@ async function compileFirmware({ jobDir, env, videoDatPath, forSdCard, onProgres
     fs.copyFileSync(videoDatPath, path.join(workDir, 'data', 'video.dat'));
   }
 
-  onProgress?.('Compiling firmware (first run may be slow due to toolchain download)...');
-  await run('pio', ['run', '-e', env], { cwd: workDir });
+  const precompiled = isBoardPreCompiled(env);
+  const globalBuildOut = path.join(FIRMWARE_TEMPLATE, '.pio', 'build', env);
+  const localBuildOut = path.join(workDir, '.pio', 'build', env);
+
+  if (precompiled) {
+    onProgress?.('Firmware is already precompiled, skipping build step...');
+  } else {
+    onProgress?.('Compiling firmware (first run may be slow due to toolchain download)...');
+    await run('pio', ['run', '-e', env], { cwd: workDir });
+  }
 
   onProgress?.('Building SPIFFS image...');
   await run('pio', ['run', '-t', 'buildfs', '-e', env], { cwd: workDir });
 
-  const buildOut = path.join(workDir, '.pio', 'build', env);
   const files = {
-    bootloader: path.join(buildOut, 'bootloader.bin'),
-    partitions: path.join(buildOut, 'partitions.bin'),
-    firmware:   path.join(buildOut, 'firmware.bin'),
-    spiffs:     path.join(buildOut, 'spiffs.bin'),
+    bootloader: precompiled ? path.join(globalBuildOut, 'bootloader.bin') : path.join(localBuildOut, 'bootloader.bin'),
+    partitions: precompiled ? path.join(globalBuildOut, 'partitions.bin') : path.join(localBuildOut, 'partitions.bin'),
+    firmware:   precompiled ? path.join(globalBuildOut, 'firmware.bin') : path.join(localBuildOut, 'firmware.bin'),
+    spiffs:     path.join(localBuildOut, 'spiffs.bin'),
   };
 
   for (const [name, p] of Object.entries(files)) {
@@ -131,4 +138,54 @@ async function compileFirmware({ jobDir, env, videoDatPath, forSdCard, onProgres
   return files;
 }
 
-module.exports = { compileFirmware, getEnvironments, resolveEnv };
+/**
+ * Check whether a given environment has already been compiled.
+ * Returns true if firmware.bin exists in .pio/build/<env>/.
+ */
+function isBoardPreCompiled(envName) {
+  const binPath = path.join(FIRMWARE_TEMPLATE, '.pio', 'build', envName, 'firmware.bin');
+  return fs.existsSync(binPath);
+}
+
+/**
+ * Pre-compile a single environment if it hasn't been compiled yet.
+ * Returns { compiled: true/false, error?: string }.
+ * The optional onProgress callback receives log lines.
+ */
+async function preCompileEnv(envName, onProgress) {
+  // Validate that the env exists in platformio.ini
+  resolveEnv(envName);
+
+  if (isBoardPreCompiled(envName)) {
+    return { compiled: false, reason: 'already-compiled' };
+  }
+
+  onProgress?.(`Compiling firmware for [env:${envName}]...`);
+  try {
+    await run('pio', ['run', '-e', envName], { cwd: FIRMWARE_TEMPLATE });
+    onProgress?.(`✓ [env:${envName}] compiled successfully.`);
+    return { compiled: true };
+  } catch (err) {
+    onProgress?.(`✗ [env:${envName}] compile failed: ${err.message}`);
+    return { compiled: false, error: err.message };
+  }
+}
+
+/**
+ * Pre-compile ALL environments that don't have binaries yet.
+ * Runs sequentially to avoid overwhelming the machine.
+ * Returns an array of { env, compiled, error? } results.
+ */
+async function preCompileAllEnvs(onProgress) {
+  const envs = getEnvironments();
+  const results = [];
+
+  for (const env of envs) {
+    const result = await preCompileEnv(env.id, onProgress);
+    results.push({ env: env.id, ...result });
+  }
+
+  return results;
+}
+
+module.exports = { compileFirmware, getEnvironments, resolveEnv, isBoardPreCompiled, preCompileEnv, preCompileAllEnvs };

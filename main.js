@@ -8,22 +8,51 @@ app.commandLine.appendSwitch('enable-web-bluetooth', true);
 
 let mainWindow;
 
+// ── PATH refresh ──────────────────────────────────────────────────────────────
+// After winget installs a tool the current process.env.PATH is stale.
+// This reads the live User+System PATH from the Windows registry so newly
+// installed binaries are immediately visible without restarting the app.
+function refreshPath() {
+  try {
+    const { refreshPath: rp } = require('./backend/src/lib/refreshPath');
+    rp();
+  } catch (_) { /* non-Windows or file not found — skip */ }
+}
+
 // ── Dependency definitions ────────────────────────────────────────────────────
 const REQUIRED_DEPS = [
   {
+    name: 'Python',
+    check: () => { execSync('python --version', { stdio: 'pipe', windowsHide: true }); },
+    description: 'Required by PlatformIO to compile ESP32 firmware.',
+    installCmd: ['winget', ['install', '--id', 'Python.Python.3.12', '-e', '--source', 'winget', '--accept-package-agreements', '--accept-source-agreements']],
+    manualUrl: 'https://www.python.org/downloads/',
+    needsPathRefresh: true,
+  },
+  {
     name: 'FFmpeg',
-    check: () => { execSync('ffmpeg -version', { stdio: 'pipe' }); },
+    check: () => { execSync('ffmpeg -version', { stdio: 'pipe', windowsHide: true }); },
     description: 'Required to process and convert video files.',
-    wingetId: 'Gyan.FFmpeg',
-    installCmd: ['winget', ['install', '--id', 'Gyan.FFmpeg', '-e', '--source', 'winget']],
+    installCmd: ['winget', ['install', '--id', 'Gyan.FFmpeg', '-e', '--source', 'winget', '--accept-package-agreements', '--accept-source-agreements']],
     manualUrl: 'https://ffmpeg.org/download.html',
+    needsPathRefresh: true,
+  },
+  {
+    name: 'Git',
+    check: () => { execSync('git --version', { stdio: 'pipe', windowsHide: true }); },
+    description: 'Used by PlatformIO to download some board toolchains.\n(Optional but strongly recommended)',
+    installCmd: ['winget', ['install', '--id', 'Git.Git', '-e', '--source', 'winget', '--accept-package-agreements', '--accept-source-agreements']],
+    manualUrl: 'https://git-scm.com/download/win',
+    needsPathRefresh: true,
+    optional: true,  // don't block startup if user skips
   },
   {
     name: 'PlatformIO CLI',
-    check: () => { execSync('pio --version', { stdio: 'pipe' }); },
+    check: () => { execSync('pio --version', { stdio: 'pipe', windowsHide: true }); },
     description: 'Required to compile ESP32 firmware.',
     installCmd: ['pip', ['install', 'platformio', '--break-system-packages']],
     manualUrl: 'https://docs.platformio.org/en/latest/core/installation/index.html',
+    needsPathRefresh: true,
   },
 ];
 
@@ -34,9 +63,8 @@ function checkDep(dep) {
 async function installDep(dep) {
   const [cmd, args] = dep.installCmd;
   return new Promise((resolve) => {
-    // Spawn a visible console window so the user can see progress
     const proc = spawn(cmd, args, {
-      shell: false,
+      shell: true,
       windowsHide: false,
     });
     proc.on('close', (code) => resolve(code === 0));
@@ -44,17 +72,48 @@ async function installDep(dep) {
   });
 }
 
+/**
+ * After PlatformIO CLI is installed, make sure the ESP32 platform
+ * (toolchain, framework, etc.) is also installed so `pio run` works
+ * offline for the first real compile.
+ */
+async function ensureESP32Toolchain() {
+  try {
+    // Quick check: if `pio pkg list -g -p espressif32` succeeds there's
+    // at least one version installed globally.
+    execSync('pio pkg list -g -p espressif32', { stdio: 'pipe', windowsHide: true });
+    return; // already installed
+  } catch (_) { /* not installed — continue */ }
+
+  return new Promise((resolve) => {
+    const proc = spawn('pio', ['pkg', 'install', '-g', '-p', 'espressif32'], {
+      shell: true,
+      windowsHide: false,
+    });
+    proc.on('close', () => resolve());
+    proc.on('error', () => resolve());
+  });
+}
+
 async function detectAndInstallDeps() {
   const missing = REQUIRED_DEPS.filter(d => !checkDep(d));
-  if (missing.length === 0) return;
+  if (missing.length === 0) {
+    // Even if nothing is missing, still ensure ESP32 toolchain
+    await ensureESP32Toolchain();
+    return;
+  }
 
   for (const dep of missing) {
+    const buttons = ['Install Automatically', 'Open Download Page'];
+    if (dep.optional) buttons.push('Skip (not required)');
+    else buttons.push('Skip');
+
     const { response } = await dialog.showMessageBox({
       type: 'warning',
       title: `Missing: ${dep.name}`,
       message: `${dep.name} is not installed.`,
       detail: `${dep.description}\n\nWould you like Bad Apple Studio to install it automatically?\n(Requires internet connection)`,
-      buttons: ['Install Automatically', 'Open Download Page', 'Skip'],
+      buttons,
       defaultId: 0,
       cancelId: 2,
     });
@@ -62,25 +121,34 @@ async function detectAndInstallDeps() {
     if (response === 0) {
       // Auto-install
       const progressBox = new BrowserWindow({
-        width: 500, height: 120,
+        width: 520, height: 140,
         resizable: false, minimizable: false,
         alwaysOnTop: true, frame: true,
         title: `Installing ${dep.name}...`,
         webPreferences: { nodeIntegration: false },
       });
-      progressBox.loadURL(`data:text/html,<body style="font-family:sans-serif;padding:20px;background:#1a1a2e;color:#eee"><p>Installing <b>${dep.name}</b>... Please wait. A terminal window may appear.</p></body>`);
+      progressBox.loadURL(`data:text/html,<body style="font-family:'Segoe UI',sans-serif;padding:24px;background:#1a1a2e;color:#eee"><p style="font-size:15px">Installing <b>${dep.name}</b>… Please wait.</p><p style="font-size:13px;color:#888">A terminal window may appear. Do not close it.</p></body>`);
 
       const success = await installDep(dep);
+
+      // Refresh PATH so the newly installed binary is visible
+      if (dep.needsPathRefresh) refreshPath();
+
       progressBox.close();
 
       if (success && checkDep(dep)) {
-        dialog.showMessageBox({ type: 'info', title: 'Installed', message: `${dep.name} installed successfully!`, buttons: ['OK'] });
+        await dialog.showMessageBox({
+          type: 'info',
+          title: 'Installed',
+          message: `${dep.name} installed successfully!`,
+          buttons: ['OK'],
+        });
       } else {
         const { response: retryResponse } = await dialog.showMessageBox({
           type: 'error',
           title: `Installation Failed`,
           message: `Could not auto-install ${dep.name}.`,
-          detail: 'Please install it manually.',
+          detail: 'Please install it manually, then restart the app.',
           buttons: ['Open Download Page', 'Skip'],
         });
         if (retryResponse === 0) shell.openExternal(dep.manualUrl);
@@ -89,6 +157,21 @@ async function detectAndInstallDeps() {
       shell.openExternal(dep.manualUrl);
     }
     // Skip — continue without this dep
+  }
+
+  // After all deps are resolved, ensure ESP32 toolchain is present
+  if (checkDep(REQUIRED_DEPS.find(d => d.name === 'PlatformIO CLI'))) {
+    const toolchainBox = new BrowserWindow({
+      width: 520, height: 140,
+      resizable: false, minimizable: false,
+      alwaysOnTop: true, frame: true,
+      title: 'Preparing ESP32 toolchain...',
+      webPreferences: { nodeIntegration: false },
+    });
+    toolchainBox.loadURL(`data:text/html,<body style="font-family:'Segoe UI',sans-serif;padding:24px;background:#1a1a2e;color:#eee"><p style="font-size:15px">Downloading <b>ESP32 toolchain</b>… This may take a few minutes on first run.</p><p style="font-size:13px;color:#888">Please wait.</p></body>`);
+
+    await ensureESP32Toolchain();
+    toolchainBox.close();
   }
 }
 
@@ -307,8 +390,12 @@ const { ipcMain } = require('electron');
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
   try {
-    await startBackend();
+    // Refresh PATH first so we can detect tools that were installed in
+    // a previous session but whose PATH wasn't visible to this process.
+    refreshPath();
+
     await detectAndInstallDeps();
+    await startBackend();
     createWindow();
   } catch (err) {
     dialog.showErrorBox('Startup Error', `Failed to start backend server:\n${err.message}`);

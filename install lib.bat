@@ -81,21 +81,26 @@ if "%NEED_RESTART%"=="1" (
 REM ---------------------------------------------------------
 REM PlatformIO Core (Python package) + ESP32 toolchain
 REM ---------------------------------------------------------
-echo [4/4] Installing PlatformIO Core + ESP32 toolchain...
-python -m pip install --upgrade platformio
+where pio >nul 2>nul
 if errorlevel 1 (
-    echo [ERROR] pip install platformio failed.
-    echo Check that the Python install above actually completed.
-    pause
-    exit /b 1
-)
-
-python -m platformio pkg install -g -p espressif32
-if errorlevel 1 (
-    echo [ERROR] PlatformIO could not download the ESP32 toolchain.
-    echo Check your internet connection and try again.
-    pause
-    exit /b 1
+    echo [4/4] PlatformIO not found - installing...
+    python -m pip install --upgrade platformio
+    if errorlevel 1 (
+        echo [ERROR] pip install platformio failed.
+        echo Check that the Python install above actually completed.
+        pause
+        exit /b 1
+    )
+    python -m platformio pkg install -g -p espressif32
+    if errorlevel 1 (
+        echo [ERROR] PlatformIO could not download the ESP32 toolchain.
+        echo Check your internet connection and try again.
+        pause
+        exit /b 1
+    )
+    set NEED_RESTART=1
+) else (
+    echo [4/4] PlatformIO already installed - skipping
 )
 
 REM ---------------------------------------------------------

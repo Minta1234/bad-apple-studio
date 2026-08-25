@@ -5,7 +5,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Bad Apple Studio — ESP32 OLED</title>
-  <link rel="icon" href="https://cdn-minta.kawinphopkodsombat.workers.dev/download/favicon.ico">
+  <link rel="icon" href="/script/favicon.ico">
   <script type="module" src="/script/install-button.js"></script>
   <link href="/script/bootstrap.min.css" rel="stylesheet">
   <style>
@@ -330,7 +330,9 @@
     </header>
 
     <div id="healthBanner" class="alert mb-3" role="alert"></div>
-
+    <div id="autoCompileBanner" class="alert mb-3" style="display:none; font-size: 0.85rem; background:rgba(45, 187, 235, 0.1); border:1px solid rgba(45, 187, 235, 0.3); color:var(--text-main); border-radius:12px;" role="alert">
+      <strong>⚙ Auto-Compiling:</strong> <span id="autoCompileText">Checking boards...</span>
+    </div>
     <div class="glass-card p-4 mb-4">
       <h5 class="text-uppercase text-tie fw-bold mb-4" style="font-size: 0.85rem; letter-spacing: 0.1em;">
         ▸ Video Settings
@@ -367,8 +369,8 @@
 
         <div class="row g-3 mb-3">
           <div class="col-sm-6">
-            <label for="fps" class="form-label text-sub fw-medium">Frames per second</label>
-            <input type="number" class="form-control" id="fps" name="fps" value="12" min="1" max="30">
+            <label for="fps" class="form-label text-sub fw-medium">FPS (Leave empty for Original)</label>
+            <input type="number" class="form-control" id="fps" name="fps" placeholder="Auto (Original)" min="1" max="60">
           </div>
           <div class="col-sm-6">
             <label for="threshold" class="form-label text-sub fw-medium">Threshold (0–255)</label>
@@ -815,7 +817,7 @@
       <div class="mt-4" style="text-align:right;">
         <button class="bm-btn-remove me-2" style="background:transparent; border:none; color:var(--text-sub);"
           onclick="document.getElementById('customBoardModal').style.display='none'">Cancel</button>
-        <button class="bm-btn-install" onclick="saveCustomBoard()">Save Board Config</button>
+        <button class="bm-btn-install" id="btnSaveCustomBoard" onclick="saveCustomBoard()">Save Board Config</button>
       </div>
     </div>
   </div>
@@ -892,9 +894,99 @@
 
         updateDisplayToggles();
         renderRotPreview();
+        // Start auto-compiling after loading envs
+        if (!autoCompileRunning) {
+          queueAllUncompiledEnvs();
+          startAutoCompileQueue();
+        }
       } catch (err) {
         console.error('Failed to load environments:', err);
       }
+    }
+
+    // ── Auto-Compile Logic ─────────────────────────────────
+    let compileQueue = [];
+    let autoCompileRunning = false;
+
+    function queueAllUncompiledEnvs() {
+      // Add all envs to the queue
+      const envIds = environments.map(e => e.id);
+      for (const id of envIds) {
+        if (!compileQueue.includes(id)) {
+          compileQueue.push(id);
+        }
+      }
+      // Put current selection at the front
+      const selected = displaySelect.value;
+      if (selected && selected !== 'ADD_CUSTOM') {
+        prioritizeCompile(selected, false);
+      }
+    }
+
+    function prioritizeCompile(envId, triggerStart = true) {
+      if (envId === 'ADD_CUSTOM') return;
+      // Move to front of queue
+      compileQueue = compileQueue.filter(id => id !== envId);
+      compileQueue.unshift(envId);
+      if (triggerStart && !autoCompileRunning) {
+        startAutoCompileQueue();
+      }
+    }
+
+    async function startAutoCompileQueue() {
+      if (autoCompileRunning) return;
+      autoCompileRunning = true;
+      const banner = document.getElementById('autoCompileBanner');
+      const textEl = document.getElementById('autoCompileText');
+
+      while (compileQueue.length > 0) {
+        const env = compileQueue[0];
+        
+        try {
+          const statusRes = await fetch(`/api/firmware/envs/${env}/status`);
+          if (statusRes.ok) {
+            const status = await statusRes.json();
+            if (status.compiled) {
+              compileQueue.shift(); // Remove from queue, already compiled
+              continue;
+            }
+          }
+        } catch (e) {
+          console.error('Status check failed:', e);
+        }
+
+        // Needs compile
+        banner.style.display = 'block';
+        textEl.textContent = `Compiling firmware for [${env}]... (First time takes longer)`;
+        
+        try {
+          const res = await fetch('/api/firmware/precompile', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ env })
+          });
+          
+          if (res.ok) {
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              // Decode SSE for future progress indication if desired
+              const chunk = decoder.decode(value, { stream: true });
+              // e.g. textEl.textContent = ...
+            }
+          }
+        } catch (e) {
+          console.error(`Failed to precompile ${env}:`, e);
+        } finally {
+          if (compileQueue[0] === env) {
+            compileQueue.shift();
+          }
+        }
+      }
+      banner.style.display = 'none';
+      autoCompileRunning = false;
     }
 
     const PIN_MAPS = {
@@ -934,6 +1026,7 @@
         updateDisplayToggles();
         updatePinMap();
         renderRotPreview();
+        prioritizeCompile(e.target.value);
       }
     });
 
@@ -1523,6 +1616,13 @@
     async function bmInstall(libName, libDeps, version) {
       const boardId = prompt(`Enter the PlatformIO board ID to use with "${libName}":\n(e.g. esp32dev, esp32s3box, lolin32)`, 'esp32dev');
       if (!boardId) return;
+
+      const list = document.getElementById('bmList');
+      list.innerHTML = `<div class="text-sub" style="padding:20px 0; text-align:center;">
+        <div class="spinner-border spinner-border-sm text-tie me-2" role="status"></div>
+        Installing ${libName}... (This updates platformio.ini)
+      </div>`;
+
       try {
         const res = await fetch('/api/boards/add', {
           method: 'POST',
@@ -1538,9 +1638,10 @@
         if (!res.ok) throw new Error(data.error);
         await bmRenderInstalled();
         loadEnvironments();
-        alert(`✓ Installed ${libName} as [env:custom-${boardId}]`);
+        alert(`✓ Installed ${libName} as [env:custom-${boardId}]\nBackground compilation has started.`);
       } catch (e) {
         alert('Install failed: ' + e.message);
+        await bmRenderInstalled();
       }
     }
 
@@ -1727,6 +1828,12 @@
       }
 
       try {
+        const btn = document.getElementById('btnSaveCustomBoard');
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = 'Saving...';
+        }
+
         const res = await fetch('/api/boards/add', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1740,9 +1847,16 @@
         displaySelect.value = data.envName;
         updateDisplayToggles();
         renderRotPreview();
-        alert(`Successfully created custom board: ${name}!`);
+        prioritizeCompile(data.envName);
+        alert(`Successfully created custom board: ${name}!\nBackground compilation has started.`);
       } catch (e) {
         alert('Failed to save custom board: ' + e.message);
+      } finally {
+        const btn = document.getElementById('btnSaveCustomBoard');
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Save Board Config';
+        }
       }
     }
 

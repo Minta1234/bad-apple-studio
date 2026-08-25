@@ -17,12 +17,13 @@ app.use('/api/firmware', firmwareRouter);
 // Health check — verifies required dependencies are installed
 app.get('/api/health', (req, res) => {
   const check = (cmd) => {
-    try { execSync(cmd, { stdio: 'pipe' }); return true; }
+    try { execSync(cmd, { stdio: 'pipe', windowsHide: true }); return true; }
     catch (_) { return false; }
   };
   res.json({
     ffmpeg: check('ffmpeg -version'),
     pio:    check('pio --version'),
+    python: check('python --version'),
     node:   true, // we are running, so node is present
   });
 });
@@ -156,3 +157,5 @@ server.on('error', (err) => {
     throw err;
   }
 });
+
+

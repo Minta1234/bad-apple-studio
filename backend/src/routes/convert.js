@@ -118,7 +118,20 @@ router.post('/convert', assignJobId, upload.single('video'), async (req, res) =>
     return res.status(400).json({ error: err.message });
   }
 
-  const fps       = clampInt(req.body.fps,       1,   30,  12);
+  let fps = parseInt(req.body.fps, 10);
+  
+  if (Number.isNaN(fps) || fps <= 0) {
+    try {
+      const { execSync } = require('child_process');
+      const fpsOut = execSync(`ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of default=noprint_wrappers=1:nokey=1 "${req.file.path}"`);
+      const [num, den] = fpsOut.toString().trim().split('/');
+      fps = Math.round((parseFloat(num) / parseFloat(den || 1)) || 30);
+    } catch (e) {
+      fps = 30; // fallback if ffprobe fails
+    }
+  } else {
+    fps = Math.min(60, fps);
+  }
   const threshold = clampInt(req.body.threshold,  0,  255, 128);
   const invert    = req.body.invert === 'true' || req.body.invert === true;
   const rotation  = parseFloat(req.body.rotation) || 0;

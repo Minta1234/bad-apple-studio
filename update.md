@@ -1,5 +1,23 @@
 # Bad Apple Studio — Update Log
 
+## v3.0.0 — Zero-Config Setup, Auto-Compile & Build Optimizations
+
+### 🚀 Zero-Configuration Dependency Bootstrap
+The desktop app (`main.js`) has been completely rewritten to check and install all required dependencies automatically when launched on a fresh Windows system. 
+- **Auto-Installs**: Python, Git, FFmpeg (via `winget`), and PlatformIO (via `pip`).
+- **Live PATH Refresh**: Injects newly installed paths directly into the running Node.js process. The app works immediately after installation without requiring a restart!
+
+### ⚙️ Frontend-Driven Background Compilation
+- **Auto-Compile Boards**: The app now intelligently pre-compiles firmware for missing boards in the background, making them ready to flash instantly.
+- **Smart Prioritization**: If you select a different board from the dropdown, it automatically bumps it to the front of the compile queue.
+- **UI Progress**: Added an "Auto-Compiling" banner at the top of the UI to track background compilation progress, plus loading spinners when installing custom boards from the Boards Manager.
+
+### ⚡ Build Cache Optimizations
+- **Massive Speedup**: The video conversion pipeline (`compileFirmware`) now re-uses precompiled binaries. If the firmware was already built by the background task, the conversion job skips the slow C++ firmware compilation entirely and *only* builds the video SPIFFS file, saving minutes of processing time per conversion!
+
+### 🎥 Original Video FPS Support
+- The "Frames per second" input field now supports an "Auto (Original)" mode. If you leave the FPS field blank, the backend will use `ffprobe` to automatically detect the uploaded video's native framerate and use it for the conversion.
+
 ## v2.1.0 — Android App + Multi-Board Color Support + BLE Reliability
 
 ### 🆕 Android Companion App

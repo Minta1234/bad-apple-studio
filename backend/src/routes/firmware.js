@@ -5,7 +5,7 @@ const fs      = require('fs');
 const path    = require('path');
 const { spawn } = require('child_process');
 
-const { getEnvironments } = require('../lib/buildFirmware');
+const { getEnvironments, isBoardPreCompiled, preCompileEnv } = require('../lib/buildFirmware');
 
 const router = express.Router();
 
@@ -103,6 +103,77 @@ router.post('/compile', express.json(), (req, res) => {
   });
 
   // If client disconnects, kill pio
+  req.on('close', () => child.kill());
+});
+
+// GET /api/firmware/envs/:id/status — check if a board is pre-compiled
+router.get('/envs/:id/status', (req, res) => {
+  const envId = req.params.id;
+  try {
+    const envs = getEnvironments();
+    const env = envs.find(e => e.id === envId);
+    if (!env) return res.status(404).json({ error: `Environment [env:${envId}] not found` });
+    res.json({
+      id: envId,
+      compiled: isBoardPreCompiled(envId),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/firmware/precompile — trigger pre-compile for a specific board, stream log via SSE
+// Body JSON: { env: 'esp32-oled096' }
+router.post('/precompile', express.json(), (req, res) => {
+  const envs = getEnvironments();
+  const envConfig = envs.find(e => e.id === req.body?.env);
+  if (!envConfig) {
+    return res.status(400).json({ error: `Environment [env:${req.body?.env}] not found` });
+  }
+  const env = envConfig.id;
+
+  // Check if already compiled
+  if (isBoardPreCompiled(env)) {
+    return res.json({ status: 'already-compiled', env });
+  }
+
+  // SSE headers
+  res.setHeader('Content-Type',  'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection',    'keep-alive');
+  res.flushHeaders();
+
+  function send(type, data) {
+    res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+  }
+
+  send('start', { env, message: `Pre-compiling [env:${env}]...` });
+
+  const child = spawn('pio', ['run', '-e', env], {
+    cwd:   FIRMWARE_DIR,
+    shell: false,
+  });
+
+  const pump = (stream) =>
+    stream?.on('data', (chunk) => {
+      for (const line of chunk.toString().split('\n')) {
+        if (line.trim()) send('log', { line });
+      }
+    });
+
+  pump(child.stdout);
+  pump(child.stderr);
+
+  child.on('error', (err) => {
+    send('error', { message: `Failed to run pio: ${err.message}` });
+    res.end();
+  });
+
+  child.on('close', (code) => {
+    send('done', { code, success: code === 0 });
+    res.end();
+  });
+
   req.on('close', () => child.kill());
 });
 
