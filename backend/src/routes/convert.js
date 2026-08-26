@@ -82,7 +82,9 @@ const upload = multer({
     },
     filename: (req, file, cb) => cb(null, 'upload' + path.extname(file.originalname || '')),
   }),
-  limits: { fileSize: 200 * 1024 * 1024 }, // 200MB max upload size
+  // Disk storage streams uploads; do not keep a large Android video in RAM.
+  // Retain a finite limit so a damaged/accidental file cannot fill the drive.
+  limits: { fileSize: 2 * 1024 * 1024 * 1024 }, // 2 GiB
   fileFilter: (req, file, cb) => {
     if (!file.mimetype.startsWith('video/') && !file.mimetype.startsWith('image/')) {
       return cb(new Error('Uploaded file must be a video or image'));
@@ -158,6 +160,19 @@ router.post('/convert', assignJobId, upload.single('video'), async (req, res) =>
   });
 });
 
+// Multer errors occur before the route callback. Delete a partial large upload
+// immediately instead of leaving it on disk after a failed mobile upload.
+router.use((err, req, res, next) => {
+  if (!err) return next();
+  if (req.jobId) {
+    fs.rmSync(path.join(JOBS_ROOT, req.jobId), { recursive: true, force: true });
+  }
+  const message = err.code === 'LIMIT_FILE_SIZE'
+    ? 'File is larger than the 2 GB upload limit.'
+    : err.message || 'Upload failed.';
+  res.status(400).json({ error: message });
+});
+
 router.delete('/clear', (req, res) => {
   try {
     const jobs = fs.readdirSync(JOBS_ROOT);
@@ -230,6 +245,7 @@ async function processJob(jobId, uploadedVideoPath, { env, fps, threshold, inver
   const outputDir   = path.join(jobDir, 'output');
   fs.mkdirSync(outputDir, { recursive: true });
 
+  try {
   // Get duration once — used by both color and 1-bit paths to cap ffmpeg extraction
   updateJob(jobId, { status: 'extracting', progress: 'Reading video duration...' });
   let duration = 0;
@@ -352,6 +368,12 @@ async function processJob(jobId, uploadedVideoPath, { env, fps, threshold, inver
   }
 
   updateJob(jobId, { status: 'done', progress: 'Done — ready to flash' });
+  } finally {
+    // Always release the original upload and intermediate frames. This is
+    // especially important for large phone videos when ffmpeg or PIO fails.
+    fs.rmSync(framesDir, { recursive: true, force: true });
+    fs.rmSync(uploadedVideoPath, { force: true });
+  }
 }
 
 function clampInt(value, min, max, fallback) {

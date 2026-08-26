@@ -342,6 +342,7 @@
         <div class="mb-3">
           <label for="videoFile" class="form-label text-sub fw-medium">Select a Video or Image (JPG, PNG, GIF)</label>
           <input class="form-control" type="file" id="videoFile" name="video" accept="video/*,image/*" required>
+          <small id="videoFileHint" class="text-sub d-block mt-1">Videos up to 2 GB are supported. A small preview is generated locally so large phone videos do not exhaust app memory.</small>
         </div>
 
         <div class="mb-3">
@@ -1204,14 +1205,29 @@
     document.getElementById('videoFile').addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (!file) return;
+      const hint = document.getElementById('videoFileHint');
+      const maxUploadBytes = 2 * 1024 * 1024 * 1024;
+      if (file.size > maxUploadBytes) {
+        hint.textContent = 'This file is larger than the 2 GB upload limit.';
+        hint.className = 'text-eye d-block mt-1';
+        e.target.value = '';
+        return;
+      }
+      hint.textContent = `${(file.size / (1024 * 1024)).toFixed(1)} MB selected. Preview is limited in size to protect mobile memory.`;
+      hint.className = 'text-sub d-block mt-1';
       if (file.type.startsWith('video/')) {
         const url = URL.createObjectURL(file);
         const vid = document.createElement('video');
         vid.src = url; vid.muted = true; vid.preload = 'auto';
         vid.addEventListener('loadeddata', () => { vid.currentTime = Math.min(1, (vid.duration || 2) / 4); });
         vid.addEventListener('seeked', () => {
+          // Do not create a canvas at a phone video's native 4K/8K size.
+          // That allocation is what makes many Android WebViews terminate.
+          const maxPreviewSide = 1280;
+          const scale = Math.min(1, maxPreviewSide / Math.max(vid.videoWidth || 1, vid.videoHeight || 1));
           const tmpCv = document.createElement('canvas');
-          tmpCv.width = vid.videoWidth; tmpCv.height = vid.videoHeight;
+          tmpCv.width = Math.max(1, Math.round(vid.videoWidth * scale));
+          tmpCv.height = Math.max(1, Math.round(vid.videoHeight * scale));
           tmpCv.getContext('2d').drawImage(vid, 0, 0);
           const img = new Image(); img.src = tmpCv.toDataURL();
           img.onload = () => { previewImg = img; renderRotPreview(); };

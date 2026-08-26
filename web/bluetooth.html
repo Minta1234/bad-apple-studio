@@ -256,6 +256,26 @@
     #notSupportedBanner {
       display: none;
     }
+
+    #mediaPreviewFrame {
+      width: min(100%, 380px);
+      max-height: 280px;
+      margin: 0 auto 16px;
+      overflow: hidden;
+      position: relative;
+      background: #0d1117;
+      border: 2px solid rgba(45, 187, 235, 0.45);
+      border-radius: 8px;
+    }
+
+    #mediaPreviewFrame img, #mediaPreviewFrame video {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: contain;
+      transform-origin: center;
+      transition: transform 0.08s linear;
+    }
   </style>
 </head>
 
@@ -270,8 +290,7 @@
       <div class="text-uppercase text-sub fw-bold" style="font-size:0.8rem;letter-spacing:0.15em;">wireless upload ·
         esp32-2432s028</div>
       <h1 class="display-6 mt-1">Bluetooth Upload</h1>
-      <p class="text-sub mt-2">Upload a converted <code>video.dat</code> file to your ESP32-2432S028 board wirelessly
-        over BLE.</p>
+      <p class="text-sub mt-2">Choose any video or image, convert it locally, then upload it to your ESP32 over BLE.</p>
     </header>
 
     <!-- Not Supported Banner -->
@@ -283,23 +302,59 @@
     </div>
 
     <div class="glass-card p-4 mb-4">
-      <h5 class="text-uppercase text-tie fw-bold mb-4" style="font-size:0.85rem;letter-spacing:0.1em;">▸ Step 1 — Pick
-        video.dat file</h5>
+      <h5 class="text-uppercase text-tie fw-bold mb-4" style="font-size:0.85rem;letter-spacing:0.1em;">▸ Step 1 — Pick Media &amp; Convert</h5>
       <div class="mb-3">
-        <label class="form-label text-sub fw-medium" for="videoFile">Converted video.dat file (from main page)</label>
-        <input class="form-control" type="file" id="videoFile" accept=".dat" />
-        <small class="text-sub d-block mt-1">Use the main page to convert your video first, then download
-          <code>video.dat</code>.</small>
+        <label class="form-label text-sub fw-medium" for="bleBoard">BLE board</label>
+        <select class="form-select" id="bleBoard"></select>
       </div>
+      <div class="mb-3">
+        <label class="form-label text-sub fw-medium" for="videoFile">Video or image</label>
+        <input class="form-control" type="file" id="videoFile" accept="video/*,image/*" />
+        <small class="text-sub d-block mt-1">Any video or image type supported by FFmpeg can be selected. The file is converted to <code>video.dat</code> locally.</small>
+      </div>
+      <div id="transformSection" style="display:none;">
+        <div id="mediaPreviewFrame">
+          <img id="imagePreview" alt="Selected media preview" style="display:none;">
+          <video id="videoPreview" muted playsinline loop style="display:none;"></video>
+        </div>
+        <label class="d-flex align-items-center gap-2 text-sub mb-3" style="cursor:pointer;">
+          <input type="checkbox" id="bleUseSdCard">
+          Use SD card for long videos (can create very large, slow BLE uploads)
+        </label>
+        <div class="mb-3">
+        <label class="form-label text-sub fw-medium mb-2">Screen Rotation &amp; Zoom</label>
+        <div class="row g-2 align-items-center mb-2">
+          <label class="col-4 col-form-label col-form-label-sm text-sub" for="bleRotation">Rotation</label>
+          <div class="col-6"><input class="form-range" type="range" id="bleRotation" min="0" max="360" value="0"></div>
+          <output class="col-2 text-sub" id="bleRotationValue">0°</output>
+        </div>
+        <div class="row g-2 align-items-center mb-2">
+          <label class="col-4 col-form-label col-form-label-sm text-sub" for="bleZoom">Zoom</label>
+          <div class="col-6"><input class="form-range" type="range" id="bleZoom" min="0.5" max="5" step="0.1" value="1"></div>
+          <output class="col-2 text-sub" id="bleZoomValue">1.0×</output>
+        </div>
+        <div class="row g-2 align-items-center mb-2">
+          <label class="col-4 col-form-label col-form-label-sm text-sub" for="blePanX">Pan X</label>
+          <div class="col-6"><input class="form-range" type="range" id="blePanX" min="-300" max="300" value="0"></div>
+          <output class="col-2 text-sub" id="blePanXValue">0</output>
+        </div>
+        <div class="row g-2 align-items-center">
+          <label class="col-4 col-form-label col-form-label-sm text-sub" for="blePanY">Pan Y</label>
+          <div class="col-6"><input class="form-range" type="range" id="blePanY" min="-300" max="300" value="0"></div>
+          <output class="col-2 text-sub" id="blePanYValue">0</output>
+        </div>
+        </div>
+      </div>
+      <button class="btn-ble" id="convertBtn" onclick="convertSelectedMedia()" disabled>⚙ Convert for Bluetooth Upload</button>
       <div id="fileInfo" style="display:none;" class="d-flex align-items-center gap-2 mt-2">
-        <span class="status-badge status-done">✅ File loaded</span>
+        <span class="status-badge status-done">✅ Ready to upload</span>
         <span id="fileName" class="text-sub" style="font-size:0.85rem;"></span>
       </div>
     </div>
 
     <div class="glass-card p-4 mb-4">
       <div class="d-flex align-items-center justify-content-between mb-3">
-        <h5 class="text-uppercase text-tie fw-bold mb-0" style="font-size:0.85rem;letter-spacing:0.1em;">▸ Step 2 —
+      <h5 class="text-uppercase text-tie fw-bold mb-0" style="font-size:0.85rem;letter-spacing:0.1em;">▸ Step 2 —
           Connect to Board</h5>
         <span id="statusBadge" class="status-badge status-disconnected">⬤ Disconnected</span>
       </div>
@@ -374,6 +429,9 @@
     let bleChar = null;
     let bleStatusChar = null;
     let fileData = null;
+    let selectedMedia = null;
+    let previewUrl = null;
+    let bleBoards = [];
     let uploadAborted = false;   // set true if the board reports an error mid-transfer
     let pendingAck = null;    // resolver for the status notification we're waiting on
 
@@ -391,6 +449,32 @@
     const connectedSection = document.getElementById('connectedSection');
     const deviceList = document.getElementById('deviceList');
     const deviceListContainer = document.getElementById('deviceListContainer');
+    const convertBtn = document.getElementById('convertBtn');
+    const boardSelect = document.getElementById('bleBoard');
+    const useSdCard = document.getElementById('bleUseSdCard');
+    const rotationInput = document.getElementById('bleRotation');
+    const zoomInput = document.getElementById('bleZoom');
+    const panXInput = document.getElementById('blePanX');
+    const panYInput = document.getElementById('blePanY');
+    const transformSection = document.getElementById('transformSection');
+    const previewFrame = document.getElementById('mediaPreviewFrame');
+    const imagePreview = document.getElementById('imagePreview');
+    const videoPreview = document.getElementById('videoPreview');
+
+    function updatePreviewTransform() {
+      const transform = `translate(${panXInput.value}px, ${panYInput.value}px) rotate(${rotationInput.value}deg) scale(${zoomInput.value})`;
+      imagePreview.style.transform = transform;
+      videoPreview.style.transform = transform;
+    }
+    function bindTransformControl(input, output, format) {
+      const update = () => { output.textContent = format(input.value); updatePreviewTransform(); };
+      input.addEventListener('input', update);
+      update();
+    }
+    bindTransformControl(rotationInput, document.getElementById('bleRotationValue'), value => `${value}°`);
+    bindTransformControl(zoomInput, document.getElementById('bleZoomValue'), value => `${Number(value).toFixed(1)}×`);
+    bindTransformControl(panXInput, document.getElementById('blePanXValue'), value => value);
+    bindTransformControl(panYInput, document.getElementById('blePanYValue'), value => value);
 
     // ── Web Bluetooth support check ───────────────────────────────────────────────
     if (!navigator.bluetooth) {
@@ -398,20 +482,124 @@
       scanBtn.disabled = true;
     }
 
-    // ── File picker ───────────────────────────────────────────────────────────────
+    // ── Board list + media conversion ────────────────────────────────────────────
+    async function loadBleBoards() {
+      try {
+        const response = await fetch('/api/firmware/envs');
+        const envs = await response.json();
+        // Older already-running Electron backends do not yet return hasBle.
+        // Every built-in BLE profile also has an SD-card flag, so retain that
+        // safe fallback until the app is restarted with the newer parser.
+        const boards = envs.filter(env => env.isColor && (env.hasBle || env.hasSdCard));
+        bleBoards = boards;
+        boardSelect.innerHTML = '';
+        boards.forEach(env => {
+          const option = document.createElement('option');
+          option.value = env.id;
+          option.textContent = `${env.label} (${env.width}×${env.height})`;
+          boardSelect.appendChild(option);
+        });
+        if (!boards.length) {
+          boardSelect.innerHTML = '<option>No BLE-enabled board configured</option>';
+          convertBtn.disabled = true;
+        }
+        updatePreviewFrame();
+      } catch (error) {
+        log(`❌ Could not load boards: ${error.message}`);
+      }
+    }
+
     document.getElementById('videoFile').addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (!file) return;
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        fileData = new Uint8Array(ev.target.result);
-        document.getElementById('fileInfo').style.display = 'flex';
-        document.getElementById('fileName').textContent = `${file.name} (${(fileData.length / 1024).toFixed(1)} KB)`;
-        log(`📁 Loaded: ${file.name} — ${fileData.length} bytes`);
-        refreshUploadBtn();
-      };
-      reader.readAsArrayBuffer(file);
+      selectedMedia = file;
+      fileData = null;
+      document.getElementById('fileInfo').style.display = 'none';
+      showMediaPreview(file);
+      transformSection.style.display = 'block';
+      convertBtn.disabled = !boardSelect.value;
+      log(`📁 Selected: ${file.name} (${formatBytes(file.size)})`);
+      refreshUploadBtn();
     });
+
+    boardSelect.addEventListener('change', updatePreviewFrame);
+
+    function updatePreviewFrame() {
+      const board = bleBoards.find(item => item.id === boardSelect.value);
+      if (!board) return;
+      previewFrame.style.aspectRatio = `${board.width} / ${board.height}`;
+    }
+
+    function showMediaPreview(file) {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      previewUrl = URL.createObjectURL(file);
+      const isVideo = file.type.startsWith('video/');
+      imagePreview.style.display = isVideo ? 'none' : 'block';
+      videoPreview.style.display = isVideo ? 'block' : 'none';
+      if (isVideo) {
+        videoPreview.src = previewUrl;
+        videoPreview.currentTime = 0;
+        videoPreview.play().catch(() => {});
+      } else {
+        imagePreview.src = previewUrl;
+      }
+      updatePreviewFrame();
+      updatePreviewTransform();
+    }
+
+    async function convertSelectedMedia() {
+      if (!selectedMedia || !boardSelect.value) return;
+      convertBtn.disabled = true;
+      fileData = null;
+      document.getElementById('fileInfo').style.display = 'none';
+      log(`⚙ Converting ${selectedMedia.name} for ${boardSelect.value}…`);
+      try {
+        const formData = new FormData();
+        formData.append('video', selectedMedia);
+        formData.append('display', boardSelect.value);
+        formData.append('fps', '12');
+        formData.append('colorMode', 'true');
+        formData.append('rotation', rotationInput.value);
+        formData.append('zoom', zoomInput.value);
+        formData.append('panX', panXInput.value);
+        formData.append('panY', panYInput.value);
+        // Default to SPIFFS: the backend automatically reduces FPS/resolution
+        // to keep BLE uploads practical. SD mode is intentionally opt-in.
+        formData.append('forSdCard', useSdCard.checked ? 'true' : 'false');
+        const response = await fetch('/api/jobs/convert', { method: 'POST', body: formData });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error || 'Conversion could not start.');
+        const job = await waitForConversion(body.jobId);
+        log('⬇ Downloading converted video.dat…');
+        const result = await fetch(`/api/jobs/${body.jobId}/files/video.dat`);
+        if (!result.ok) throw new Error('Converted video.dat could not be read.');
+        // Keep a Blob, not a Uint8Array: uploadFile reads one BLE chunk at a time.
+        fileData = await result.blob();
+        document.getElementById('fileInfo').style.display = 'flex';
+        document.getElementById('fileName').textContent = `video.dat (${formatBytes(fileData.size)})`;
+        log(`✅ Conversion complete: ${formatBytes(fileData.size)} ready for BLE upload.`);
+        const estimatedSeconds = fileData.size / (490 / 0.025);
+        if (estimatedSeconds > 300) {
+          log(`⚠️ Estimated BLE transfer time: ${formatDuration(estimatedSeconds)}. Use a shorter video/lower FPS, or upload video.dat to the SD card directly.`);
+        }
+      } catch (error) {
+        log(`❌ Conversion failed: ${error.message}`);
+      } finally {
+        convertBtn.disabled = !selectedMedia || !boardSelect.value;
+        refreshUploadBtn();
+      }
+    }
+
+    async function waitForConversion(jobId) {
+      while (true) {
+        const response = await fetch(`/api/jobs/${jobId}`);
+        const job = await response.json();
+        if (job.status === 'error') throw new Error(job.error || 'Conversion failed.');
+        log(`⚙ ${job.progress || job.status}`);
+        if (job.status === 'done') return job;
+        await sleep(1500);
+      }
+    }
 
     // ── Logging ───────────────────────────────────────────────────────────────────
     function log(msg) {
@@ -427,7 +615,7 @@
 
     // ── Refresh upload button ──────────────────────────────────────────────────────
     function refreshUploadBtn() {
-      uploadBtn.disabled = !(fileData && bleChar);
+      uploadBtn.disabled = !(fileData && fileData.size > 0 && bleChar);
     }
 
     // ── Scan & Connect ────────────────────────────────────────────────────────────
@@ -609,7 +797,8 @@
       progressWrap.style.display = 'block';
       setStatus('sending', '⬤ Uploading...');
       uploadAborted = false;
-      log(`📤 Starting upload: ${fileData.length} bytes in ${Math.ceil(fileData.length / CHUNK_SIZE)} chunks...`);
+      const totalBytes = fileData.size;
+      log(`📤 Starting upload: ${totalBytes} bytes in ${Math.ceil(totalBytes / CHUNK_SIZE)} chunks...`);
 
       const encoder = new TextEncoder();
 
@@ -617,7 +806,7 @@
         // Tell the board how big the file is *before* sending any data, so it can
         // pick SPIFFS vs SD card up front instead of failing partway through.
         const startAck = bleStatusChar ? waitForAck() : Promise.resolve(null);
-        await bleChar.writeValueWithoutResponse(encoder.encode(`START:${fileData.length}`));
+        await bleChar.writeValueWithoutResponse(encoder.encode(`START:${totalBytes}`));
         const startResult = await startAck;
         if (startResult && startResult.startsWith('ERROR:')) {
           throw new Error(friendlyUploadError(startResult));
@@ -626,19 +815,19 @@
         let sent = 0;
         let retryCount = 0;
         const MAX_RETRIES = 3;
-        while (sent < fileData.length) {
+        while (sent < totalBytes) {
           if (uploadAborted) throw new Error('Board aborted the transfer — check its storage.');
 
-          const chunk = fileData.slice(sent, sent + CHUNK_SIZE);
+          const chunk = new Uint8Array(await fileData.slice(sent, sent + CHUNK_SIZE).arrayBuffer());
           try {
             await bleChar.writeValueWithoutResponse(chunk);
             sent += chunk.byteLength;
             retryCount = 0; // reset on success
 
-            const pct = Math.round((sent / fileData.length) * 100);
+            const pct = Math.round((sent / totalBytes) * 100);
             progressBar.style.width = pct + '%';
             progressPct.textContent = pct + '%';
-            progressLabel.textContent = `Sending... ${(sent / 1024).toFixed(1)} KB / ${(fileData.length / 1024).toFixed(1)} KB`;
+            progressLabel.textContent = `Sending... ${(sent / 1024).toFixed(1)} KB / ${(totalBytes / 1024).toFixed(1)} KB`;
 
             // Delay to avoid overwhelming the ESP32 BLE buffer
             await sleep(25);
@@ -660,7 +849,7 @@
 
         setStatus('done', '⬤ Done!');
         progressLabel.textContent = 'Upload complete!';
-        log(`✅ Upload complete! ${(fileData.length / 1024).toFixed(1)} KB sent.`);
+        log(`✅ Upload complete! ${(totalBytes / 1024).toFixed(1)} KB sent.`);
         log('🎬 Board is now reloading video.dat — watch your display!');
 
       } catch (err) {
@@ -673,6 +862,15 @@
 
     // ── Helpers ───────────────────────────────────────────────────────────────────
     function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+    function formatBytes(bytes) {
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    }
+    function formatDuration(seconds) {
+      if (seconds < 3600) return `${Math.ceil(seconds / 60)} minutes`;
+      return `${(seconds / 3600).toFixed(1)} hours`;
+    }
+    loadBleBoards();
   </script>
 </body>
 

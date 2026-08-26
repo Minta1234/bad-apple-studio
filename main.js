@@ -8,6 +8,26 @@ app.commandLine.appendSwitch('enable-web-bluetooth', true);
 
 let mainWindow;
 
+// Release builds can carry FFmpeg and a self-contained PlatformIO Python
+// environment in resources/tools. Put those folders first so the executable
+// works on a clean Windows PC without winget, pip, or a system PATH setup.
+function useBundledTools() {
+  const toolRoot = app.isPackaged
+    ? path.join(process.resourcesPath, 'tools')
+    : path.join(__dirname, 'tools');
+  const directories = [
+    path.join(toolRoot, 'ffmpeg'),
+    path.join(toolRoot, 'platformio'),
+    path.join(toolRoot, 'platformio', 'Scripts'),
+  ];
+  const existing = directories.filter(dir => require('fs').existsSync(dir));
+  if (existing.length) {
+    process.env.PATH = `${existing.join(path.delimiter)}${path.delimiter}${process.env.PATH || ''}`;
+    // Keep downloaded platforms/toolchains beside the executable too.
+    process.env.PLATFORMIO_CORE_DIR = path.join(toolRoot, 'platformio-core');
+  }
+}
+
 // ── PATH refresh ──────────────────────────────────────────────────────────────
 // After winget installs a tool the current process.env.PATH is stale.
 // This reads the live User+System PATH from the Windows registry so newly
@@ -390,6 +410,7 @@ const { ipcMain } = require('electron');
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
   try {
+    useBundledTools();
     // Refresh PATH first so we can detect tools that were installed in
     // a previous session but whose PATH wasn't visible to this process.
     refreshPath();

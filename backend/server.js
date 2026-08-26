@@ -7,6 +7,7 @@ const https = require('https');
 
 const jobsRouter    = require('./src/routes/convert');
 const firmwareRouter = require('./src/routes/firmware');
+const { queuePrecompile, queueAllEnvironments, getCompileStatus } = require('./src/lib/compileQueue');
 
 const app = express();
 
@@ -87,10 +88,17 @@ app.post('/api/boards/add', express.json(), (req, res) => {
   
   try {
     fs.appendFileSync(pioIniPath, newEnv);
+    queuePrecompile(envName);
     res.json({ success: true, envName });
   } catch (err) {
     res.status(500).json({ error: 'Failed to write to platformio.ini: ' + err.message });
   }
+});
+
+// Persistent status is useful to both the web UI and a packaged app after a
+// restart. The compilation itself is started by the backend, not the page.
+app.get('/api/boards/:envName/compile-status', (req, res) => {
+  res.json(getCompileStatus(req.params.envName));
 });
 
 // List installed environments (for the Boards Manager)
@@ -147,6 +155,7 @@ const HOST = 'localhost';
 
 const server = app.listen(PORT, HOST, () => {
   console.log(`Bad Apple Studio: http://${HOST}:${PORT}`);
+  queueAllEnvironments();
 });
 
 server.on('error', (err) => {
@@ -157,5 +166,4 @@ server.on('error', (err) => {
     throw err;
   }
 });
-
 

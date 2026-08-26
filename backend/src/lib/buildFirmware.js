@@ -5,6 +5,7 @@ const path = require('path');
 const { run } = require('./runCommand');
 
 const FIRMWARE_TEMPLATE = path.resolve(__dirname, '../../../firmware');
+const activeBuilds = new Map();
 
 /**
  * Parse platformio.ini and return all [env:xxx] blocks with display metadata,
@@ -34,6 +35,7 @@ function getEnvironments() {
         board:    'esp32dev',
         isCustom: envMatch[1].startsWith('custom-'),
         hasSdCard: false,
+        hasBle: false,
       };
       inLibDeps = false;
       continue;
@@ -76,6 +78,9 @@ function getEnvironments() {
       if (trimmed.includes('HAS_SD_CARD')) {
         currentEnv.hasSdCard = true;
       }
+      if (trimmed.includes('HAS_BLE')) {
+        currentEnv.hasBle = true;
+      }
     }
   }
   if (currentEnv) envs.push(currentEnv);
@@ -108,7 +113,11 @@ async function compileFirmware({ jobDir, env, videoDatPath, forSdCard, onProgres
     fs.copyFileSync(videoDatPath, path.join(workDir, 'data', 'video.dat'));
   }
 
-  const precompiled = isBoardPreCompiled(env);
+  // A job must never reach the flasher with an unbuilt board.  This also
+  // covers boards added while the browser-side precompile queue is not open.
+  const precompileResult = await preCompileEnv(env, onProgress);
+  if (precompileResult.error) throw new Error(`Firmware compile failed for [env:${env}]: ${precompileResult.error}`);
+  const precompiled = true;
   const globalBuildOut = path.join(FIRMWARE_TEMPLATE, '.pio', 'build', env);
   const localBuildOut = path.join(workDir, '.pio', 'build', env);
 
@@ -160,15 +169,26 @@ async function preCompileEnv(envName, onProgress) {
     return { compiled: false, reason: 'already-compiled' };
   }
 
-  onProgress?.(`Compiling firmware for [env:${envName}]...`);
-  try {
-    await run('pio', ['run', '-e', envName], { cwd: FIRMWARE_TEMPLATE });
-    onProgress?.(`✓ [env:${envName}] compiled successfully.`);
-    return { compiled: true };
-  } catch (err) {
-    onProgress?.(`✗ [env:${envName}] compile failed: ${err.message}`);
-    return { compiled: false, error: err.message };
-  }
+  // Two conversion jobs and the background queue may request the same board
+  // at once. PlatformIO cannot safely write to the same .pio/build directory
+  // concurrently, so share one build promise per environment.
+  if (activeBuilds.has(envName)) return activeBuilds.get(envName);
+
+  const build = (async () => {
+    onProgress?.(`Compiling firmware for [env:${envName}]...`);
+    try {
+      await run('pio', ['run', '-e', envName], { cwd: FIRMWARE_TEMPLATE });
+      onProgress?.(`✓ [env:${envName}] compiled successfully.`);
+      return { compiled: true };
+    } catch (err) {
+      onProgress?.(`✗ [env:${envName}] compile failed: ${err.message}`);
+      return { compiled: false, error: err.message };
+    } finally {
+      activeBuilds.delete(envName);
+    }
+  })();
+  activeBuilds.set(envName, build);
+  return build;
 }
 
 /**
