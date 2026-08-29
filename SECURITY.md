@@ -2,20 +2,21 @@
 
 ## Supported Versions
 
-Use this section to tell people about which versions of your project are
-currently being supported with security updates.
+We currently support the following versions of Bad Apple Studio with security updates:
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 5.1.x   | :white_check_mark: |
-| 5.0.x   | :x:                |
 | 4.0.x   | :white_check_mark: |
-| < 4.0   | :x:                |
+| 3.0.x   | :x:                |
+| < 3.0   | :x:                |
 
 ## Reporting a Vulnerability
 
-Use this section to tell people how to report a vulnerability.
+If you discover a security vulnerability within Bad Apple Studio, please report it via GitHub's **Private Vulnerability Reporting** feature by going to the **Security** tab of the repository and selecting **Report a vulnerability**.
 
-Tell them where to go, how often they can expect to get an update on a
-reported vulnerability, what to expect if the vulnerability is accepted or
-declined, etc.
+We take all security issues seriously and will respond to reports as quickly as possible. Please do not open a public issue for security-related concerns to protect the safety of all users.
+
+### What to include in your report:
+- A description of the vulnerability and its potential impact.
+- Steps to reproduce the issue (including what OS and board you are using).
+- Any potential workarounds or solutions if you know them.
