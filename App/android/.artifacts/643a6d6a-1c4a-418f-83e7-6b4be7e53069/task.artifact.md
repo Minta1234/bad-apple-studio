@@ -1,0 +1,3 @@
+- `[x]` Update `gradle.properties` with JVM locale flags
+- `[x]` Stop Gradle daemon
+- `[x]` Run clean build to verify fix

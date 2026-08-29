@@ -1,0 +1,2 @@
+- [x] Update FFmpegKit dependency in `app/build.gradle.kts`
+- [x] Verify build with `./gradlew :app:assembleDebug`
