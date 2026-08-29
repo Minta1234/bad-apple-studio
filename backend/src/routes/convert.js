@@ -7,7 +7,7 @@ const path    = require('path');
 const crypto  = require('crypto');
 const { execSync } = require('child_process');
 
-const { createJob, updateJob, getJob } = require('../jobs');
+const { createJob, updateJob, appendJobLog, getJob } = require('../jobs');
 const { extractFrames }                = require('../lib/ffmpegExtract');
 const { packFrames }                   = require('../lib/packFrames');
 const { extractFramesColor, packFramesColor } = require('../lib/packFramesColor');
@@ -244,6 +244,14 @@ async function processJob(jobId, uploadedVideoPath, { env, fps, threshold, inver
   const videoDatPath = path.join(jobDir, 'video.dat');
   const outputDir   = path.join(jobDir, 'output');
   fs.mkdirSync(outputDir, { recursive: true });
+  const onLog = (chunk) => {
+    // Command output arrives in arbitrary chunks; preserve readable lines and
+    // omit empty carriage-return updates (such as ffmpeg's progress redraws).
+    for (const line of String(chunk).split(/\r?\n|\r/)) {
+      const trimmed = line.trim();
+      if (trimmed) appendJobLog(jobId, trimmed);
+    }
+  };
 
   try {
   // Get duration once — used by both color and 1-bit paths to cap ffmpeg extraction
@@ -322,13 +330,13 @@ async function processJob(jobId, uploadedVideoPath, { env, fps, threshold, inver
     }
 
     updateJob(jobId, { status: 'extracting', progress: `Converting video to RGB565 raw (${W}x${H})...` });
-    const rawFile = await extractFramesColor(uploadedVideoPath, framesDir, { fps, width: W, height: H, isImage, duration, rotation, zoom, panX, panY });
+    const rawFile = await extractFramesColor(uploadedVideoPath, framesDir, { fps, width: W, height: H, isImage, duration, rotation, zoom, panX, panY, onLog });
 
     updateJob(jobId, { status: 'packing', progress: `Packing color frames into video.dat...` });
     packFramesColor(rawFile, videoDatPath, { width: W, height: H, fps });
   } else {
     updateJob(jobId, { status: 'extracting', progress: 'Extracting frames from video with ffmpeg...' });
-    const frames = await extractFrames(uploadedVideoPath, framesDir, { fps, width: W, height: H, isImage, duration, rotation, zoom, panX, panY });
+    const frames = await extractFrames(uploadedVideoPath, framesDir, { fps, width: W, height: H, isImage, duration, rotation, zoom, panX, panY, onLog });
 
     updateJob(jobId, { status: 'packing', progress: `RLE-encoding ${frames.length} frames...` });
     const { headerBytes, payloadBytes } = packFrames(frames, videoDatPath, { width: W, height: H, fps, threshold, invert });
@@ -361,6 +369,7 @@ async function processJob(jobId, uploadedVideoPath, { env, fps, threshold, inver
     videoDatPath,
     forSdCard,
     onProgress: (msg) => updateJob(jobId, { progress: msg }),
+    onLog,
   });
 
   for (const [name, srcPath] of Object.entries(files)) {

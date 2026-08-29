@@ -216,6 +216,22 @@
       justify-content: center;
     }
 
+    /* ── Conversion logs ── */
+    #conversionLogs {
+      display: none;
+      margin-top: 10px;
+      max-height: 260px;
+      overflow: auto;
+      padding: 12px;
+      border: 1px solid rgba(45, 187, 235, 0.25);
+      border-radius: 8px;
+      background: #0d1117;
+      color: #b9f6ca;
+      font: 0.75rem/1.45 'Cascadia Code', 'Fira Code', monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
     .rot-btn {
       background: rgba(45, 187, 235, 0.1);
       border: 1px solid rgba(45, 187, 235, 0.3);
@@ -398,6 +414,13 @@
               <canvas id="rotPreviewCanvas"
                 style="border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; box-shadow: 0 4px 15px rgba(0,0,0,0.5);"></canvas>
             </div>
+            <div id="previewSeekWrap" style="display:none; width:100%; max-width:300px; margin:-6px auto 12px;">
+              <input type="range" id="previewSeek" class="form-range" min="0" max="0" step="0.01" value="0"
+                aria-label="Video preview position">
+              <div class="d-flex justify-content-between text-sub" style="font-size:0.72rem;">
+                <span id="previewSeekCurrent">0:00</span><span id="previewSeekDuration">0:00</span>
+              </div>
+            </div>
 
             <div class="d-flex align-items-center gap-3 mb-2" style="width: 100%; max-width: 300px; margin: 0 auto;">
               <label class="text-sub" style="min-width: 60px; font-size: 0.85rem;">Rotate</label>
@@ -416,6 +439,17 @@
                 oninput="onZoomValInput(this)"
                 style="width:54px;font-size:0.85rem;background:transparent;border:1px solid rgba(255,255,255,0.2);border-radius:4px;color:inherit;padding:1px 4px;text-align:center;"
                 title="Click to type a value">
+            </div>
+
+            <div class="d-flex align-items-center gap-3 mb-2" style="width:100%; max-width:300px; margin:0 auto;">
+              <label class="text-sub" style="min-width:60px; font-size:0.85rem;">Pan X</label>
+              <input type="range" class="form-range" id="panXSlider" min="-300" max="300" value="0">
+              <output class="text-sub" id="panXValue" style="min-width:32px; font-size:0.8rem;">0</output>
+            </div>
+            <div class="d-flex align-items-center gap-3" style="width:100%; max-width:300px; margin:0 auto;">
+              <label class="text-sub" style="min-width:60px; font-size:0.85rem;">Pan Y</label>
+              <input type="range" class="form-range" id="panYSlider" min="-300" max="300" value="0">
+              <output class="text-sub" id="panYValue" style="min-width:32px; font-size:0.8rem;">0</output>
             </div>
 
             <div class="mt-3">
@@ -450,6 +484,9 @@
       </form>
 
       <div id="status" class="mt-3 text-sub fw-medium" style="min-height: 24px; font-size: 0.9rem;"></div>
+      <button type="button" id="viewLogsBtn" class="rot-btn mt-2" style="display:none;"
+        aria-expanded="false">▸ View logs</button>
+      <pre id="conversionLogs" aria-live="polite"></pre>
     </div>
 
     <div class="glass-card p-4 mb-4" id="flashPanel" style="display: none;">
@@ -828,6 +865,8 @@
     const form = document.getElementById('convertForm');
     const statusEl = document.getElementById('status');
     const submitBtn = document.getElementById('submitBtn');
+    const viewLogsBtn = document.getElementById('viewLogsBtn');
+    const conversionLogs = document.getElementById('conversionLogs');
     const flashPanel = document.getElementById('flashPanel');
     const installBtn = document.getElementById('installBtn');
 
@@ -848,6 +887,25 @@
     let environments = [];
     let currentRotation = 0;
     let previewImg = null;
+    let previewVideo = null;
+    let previewVideoUrl = null;
+    let logsVisible = false;
+
+    viewLogsBtn.addEventListener('click', () => {
+      logsVisible = !logsVisible;
+      conversionLogs.style.display = logsVisible ? 'block' : 'none';
+      viewLogsBtn.textContent = logsVisible ? '▾ Hide logs' : '▸ View logs';
+      viewLogsBtn.setAttribute('aria-expanded', String(logsVisible));
+      if (logsVisible) conversionLogs.scrollTop = conversionLogs.scrollHeight;
+    });
+
+    function showJobLogs(logs = []) {
+      conversionLogs.textContent = logs.map(entry => {
+        const time = new Date(entry.at).toLocaleTimeString();
+        return `[${time}] ${entry.message}`;
+      }).join('\n');
+      if (logsVisible) conversionLogs.scrollTop = conversionLogs.scrollHeight;
+    }
 
     // ── Health Check ───────────────────────────────────────
     async function checkHealth() {
@@ -1057,6 +1115,31 @@
     // ── Rotation Preview ─────────────────────────────────────
     const rotCanvas = document.getElementById('rotPreviewCanvas');
     const rotCtx = rotCanvas.getContext('2d');
+    const previewSeekWrap = document.getElementById('previewSeekWrap');
+    const previewSeek = document.getElementById('previewSeek');
+    const previewSeekCurrent = document.getElementById('previewSeekCurrent');
+    const previewSeekDuration = document.getElementById('previewSeekDuration');
+    const panXSlider = document.getElementById('panXSlider');
+    const panYSlider = document.getElementById('panYSlider');
+    const panXValue = document.getElementById('panXValue');
+    const panYValue = document.getElementById('panYValue');
+
+    function formatPreviewTime(seconds) {
+      if (!Number.isFinite(seconds)) return '0:00';
+      return `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`;
+    }
+
+    previewSeek.addEventListener('input', () => {
+      if (previewVideo) previewVideo.currentTime = Number(previewSeek.value);
+    });
+    panXSlider.addEventListener('input', () => {
+      currentPanX = Number(panXSlider.value); panXValue.textContent = currentPanX;
+      document.getElementById('panX').value = currentPanX; renderRotPreview();
+    });
+    panYSlider.addEventListener('input', () => {
+      currentPanY = Number(panYSlider.value); panYValue.textContent = currentPanY;
+      document.getElementById('panY').value = currentPanY; renderRotPreview();
+    });
 
     let currentZoom = 1.0;
     let currentPanX = 0;
@@ -1088,9 +1171,13 @@
       // The image is inside the canvas which has internal coordinates.
       currentPanX += dx * scaleX;
       currentPanY += dy * scaleY;
+      currentPanX = Math.max(-300, Math.min(300, currentPanX));
+      currentPanY = Math.max(-300, Math.min(300, currentPanY));
 
       document.getElementById('panX').value = currentPanX;
       document.getElementById('panY').value = currentPanY;
+      panXSlider.value = currentPanX; panYSlider.value = currentPanY;
+      panXValue.textContent = Math.round(currentPanX); panYValue.textContent = Math.round(currentPanY);
       renderRotPreview();
     });
     window.addEventListener('mouseup', () => { isDragging = false; });
@@ -1137,6 +1224,8 @@
       currentPanY = 0;
       document.getElementById('panX').value = currentPanX;
       document.getElementById('panY').value = currentPanY;
+      panXSlider.value = 0; panYSlider.value = 0;
+      panXValue.textContent = '0'; panYValue.textContent = '0';
       updateTransform();
     }
 
@@ -1205,6 +1294,9 @@
     document.getElementById('videoFile').addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (!file) return;
+      if (previewVideoUrl) URL.revokeObjectURL(previewVideoUrl);
+      previewVideo = null;
+      previewVideoUrl = null;
       const hint = document.getElementById('videoFileHint');
       const maxUploadBytes = 2 * 1024 * 1024 * 1024;
       if (file.size > maxUploadBytes) {
@@ -1218,8 +1310,18 @@
       if (file.type.startsWith('video/')) {
         const url = URL.createObjectURL(file);
         const vid = document.createElement('video');
-        vid.src = url; vid.muted = true; vid.preload = 'auto';
-        vid.addEventListener('loadeddata', () => { vid.currentTime = Math.min(1, (vid.duration || 2) / 4); });
+        previewVideo = vid;
+        previewVideoUrl = url;
+        // Decode frames for the canvas preview only; never display or autoplay
+        // a native video player on the main page.
+        vid.src = url; vid.muted = true; vid.autoplay = false; vid.controls = false; vid.preload = 'auto';
+        vid.addEventListener('loadedmetadata', () => {
+          previewSeek.max = vid.duration || 0;
+          previewSeek.value = Math.min(1, (vid.duration || 2) / 4);
+          previewSeekDuration.textContent = formatPreviewTime(vid.duration);
+          previewSeekWrap.style.display = 'block';
+          vid.currentTime = Number(previewSeek.value);
+        });
         vid.addEventListener('seeked', () => {
           // Do not create a canvas at a phone video's native 4K/8K size.
           // That allocation is what makes many Android WebViews terminate.
@@ -1231,10 +1333,11 @@
           tmpCv.getContext('2d').drawImage(vid, 0, 0);
           const img = new Image(); img.src = tmpCv.toDataURL();
           img.onload = () => { previewImg = img; renderRotPreview(); };
-          URL.revokeObjectURL(url);
+          previewSeekCurrent.textContent = formatPreviewTime(vid.currentTime);
         });
         vid.load();
       } else if (file.type.startsWith('image/')) {
+        previewSeekWrap.style.display = 'none';
         const reader = new FileReader();
         reader.onload = (ev) => {
           const img = new Image(); img.src = ev.target.result;
@@ -1254,6 +1357,12 @@
       e.preventDefault();
       submitBtn.disabled = true;
       flashPanel.style.display = 'none';
+      viewLogsBtn.style.display = 'none';
+      conversionLogs.style.display = 'none';
+      conversionLogs.textContent = '';
+      logsVisible = false;
+      viewLogsBtn.textContent = '▸ View logs';
+      viewLogsBtn.setAttribute('aria-expanded', 'false');
       statusEl.className = 'mt-3 text-sub fw-medium';
       setStatus('Uploading...');
       try {
@@ -1261,6 +1370,7 @@
         const res = await fetch('/api/jobs/convert', { method: 'POST', body: fd });
         const body = await res.json();
         if (!res.ok) throw new Error(body.error || 'Upload failed');
+        viewLogsBtn.style.display = 'inline-block';
         await pollJob(body.jobId);
       } catch (err) {
         statusEl.className = 'mt-3 text-eye fw-medium';
@@ -1273,6 +1383,7 @@
       while (true) {
         const res = await fetch(`/api/jobs/${jobId}`);
         const job = await res.json();
+        showJobLogs(job.logs);
         if (job.status === 'error') {
           statusEl.className = 'mt-3 text-eye fw-medium';
           setStatus(job.error || 'An error occurred during processing');

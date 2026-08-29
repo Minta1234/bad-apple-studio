@@ -7,6 +7,8 @@ const { execSync, spawn } = require('child_process');
 app.commandLine.appendSwitch('enable-web-bluetooth', true);
 
 let mainWindow;
+let backendServer = null;
+const startupProcesses = new Set();
 
 // Release builds can carry FFmpeg and a self-contained PlatformIO Python
 // environment in resources/tools. Put those folders first so the executable
@@ -87,6 +89,9 @@ async function installDep(dep) {
       shell: true,
       windowsHide: false,
     });
+    startupProcesses.add(proc);
+    proc.once('close', () => startupProcesses.delete(proc));
+    proc.once('error', () => startupProcesses.delete(proc));
     proc.on('close', (code) => resolve(code === 0));
     proc.on('error', () => resolve(false));
   });
@@ -110,6 +115,9 @@ async function ensureESP32Toolchain() {
       shell: true,
       windowsHide: false,
     });
+    startupProcesses.add(proc);
+    proc.once('close', () => startupProcesses.delete(proc));
+    proc.once('error', () => startupProcesses.delete(proc));
     proc.on('close', () => resolve());
     proc.on('error', () => resolve());
   });
@@ -200,7 +208,7 @@ function startBackend() {
   return new Promise((resolve, reject) => {
     try {
       console.log('Starting backend server directly within Electron main process...');
-      require('./backend/server.js');
+      backendServer = require('./backend/server.js').server;
 
       // Wait for the backend to be healthy
       let retries = 0;
@@ -278,28 +286,13 @@ function createWindow() {
     }
   });
 
-  // Show a native port picker dialog instead of auto-selecting
+  // Always show the custom picker, including when exactly one device is
+  // available, so the user can verify which port is being used.
   mainWindow.webContents.session.on('select-serial-port', (event, portList, webContents, callback) => {
     event.preventDefault();
 
-    if (!portList || portList.length === 0) {
-      dialog.showMessageBox(mainWindow, {
-        type: 'warning',
-        title: 'No Ports Found',
-        message: 'No serial ports were detected.',
-        detail: 'Make sure the ESP32 is plugged in via USB and that its USB drivers are installed.',
-        buttons: ['OK'],
-      });
-      callback('');
-      return;
-    }
-
-    if (portList.length === 1) {
-      callback(portList[0].portId);
-      return;
-    }
-
-    // Multiple ports — open the custom Chrome-style picker
+    // Open the custom Chrome-style picker even when the initial list is empty;
+    // hotplug events below can populate it when the user plugs the board in.
     let pickerWindow = new BrowserWindow({
       width: 450,
       height: 400,
@@ -430,4 +423,21 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+// Stop the embedded backend and terminate FFmpeg/PlatformIO descendants when
+// the Electron window closes. On Windows taskkill /T is required because PIO
+// and FFmpeg can otherwise outlive their Node parent process.
+app.on('before-quit', () => {
+  for (const proc of startupProcesses) {
+    try {
+      if (process.platform === 'win32' && proc.pid) {
+        const killer = spawn('taskkill', ['/pid', String(proc.pid), '/t', '/f'], { windowsHide: true });
+        killer.unref();
+      } else proc.kill('SIGTERM');
+    } catch (_) { }
+  }
+  startupProcesses.clear();
+  try { require('./backend/src/lib/runCommand').terminateActiveCommands(); } catch (_) { }
+  try { if (backendServer) backendServer.close(); } catch (_) { }
 });

@@ -128,6 +128,31 @@
       cursor: not-allowed;
     }
 
+    .transfer-mode {
+      display: inline-flex;
+      padding: 4px;
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      background: rgba(45, 187, 235, 0.08);
+      gap: 4px;
+    }
+
+    .transfer-mode button {
+      border: 0;
+      border-radius: 8px;
+      padding: 7px 12px;
+      background: transparent;
+      color: var(--text-sub);
+      font: inherit;
+      font-size: 0.78rem;
+      font-weight: 700;
+    }
+
+    .transfer-mode button.active {
+      background: var(--tie);
+      color: #fff;
+    }
+
     .btn-cancel {
       background: rgba(240, 60, 114, 0.1);
       color: #f03c72;
@@ -276,6 +301,11 @@
       transform-origin: center;
       transition: transform 0.08s linear;
     }
+
+    #videoSeekRow { display:none; width:min(100%, 380px); margin:-8px auto 16px; }
+    #videoSeek { width:100%; accent-color:var(--tie); }
+    #videoTime { display:flex; justify-content:space-between; color:var(--text-sub); font-size:0.72rem; }
+
   </style>
 </head>
 
@@ -287,10 +317,14 @@
 
   <div class="container py-5">
     <header class="mb-4 text-center">
-      <div class="text-uppercase text-sub fw-bold" style="font-size:0.8rem;letter-spacing:0.15em;">wireless upload ·
+      <div class="text-uppercase text-sub fw-bold" id="modeKicker" style="font-size:0.8rem;letter-spacing:0.15em;">wireless upload ·
         esp32-2432s028</div>
-      <h1 class="display-6 mt-1">Bluetooth Upload</h1>
-      <p class="text-sub mt-2">Choose any video or image, convert it locally, then upload it to your ESP32 over BLE.</p>
+      <h1 class="display-6 mt-1" id="modeTitle">Bluetooth Upload</h1>
+      <p class="text-sub mt-2" id="modeDescription">Choose any video or image, convert it locally, then upload it to your ESP32 over BLE.</p>
+      <div class="transfer-mode mt-2" role="group" aria-label="Upload method">
+        <button type="button" id="bluetoothModeBtn" class="active">📡 Bluetooth</button>
+        <button type="button" id="serialModeBtn">🔌 Serial USB</button>
+      </div>
     </header>
 
     <!-- Not Supported Banner -->
@@ -304,7 +338,7 @@
     <div class="glass-card p-4 mb-4">
       <h5 class="text-uppercase text-tie fw-bold mb-4" style="font-size:0.85rem;letter-spacing:0.1em;">▸ Step 1 — Pick Media &amp; Convert</h5>
       <div class="mb-3">
-        <label class="form-label text-sub fw-medium" for="bleBoard">BLE board</label>
+        <label class="form-label text-sub fw-medium" for="bleBoard" id="boardLabel">Bluetooth board</label>
         <select class="form-select" id="bleBoard"></select>
       </div>
       <div class="mb-3">
@@ -317,9 +351,13 @@
           <img id="imagePreview" alt="Selected media preview" style="display:none;">
           <video id="videoPreview" muted playsinline loop style="display:none;"></video>
         </div>
+        <div id="videoSeekRow">
+          <input id="videoSeek" type="range" min="0" max="0" value="0" step="0.01" aria-label="Video preview position">
+          <div id="videoTime"><span>0:00</span><span>0:00</span></div>
+        </div>
         <label class="d-flex align-items-center gap-2 text-sub mb-3" style="cursor:pointer;">
           <input type="checkbox" id="bleUseSdCard">
-          Use SD card for long videos (can create very large, slow BLE uploads)
+          Use SD card for long videos (can create very large, slow uploads)
         </label>
         <div class="mb-3">
         <label class="form-label text-sub fw-medium mb-2">Screen Rotation &amp; Zoom</label>
@@ -384,6 +422,12 @@
         </div>
         <button class="btn-cancel mt-2" onclick="disconnect()">✕ Disconnect</button>
       </div>
+
+      <div id="serialConnectSection" style="display:none;">
+        <p class="text-sub" style="font-size:0.85rem;">Connect the ESP32 with a data USB cable. Disconnect any Debug Monitor first.</p>
+        <button class="btn-ble" id="serialConnectBtn" onclick="connectSerial()">🔌 Connect USB Serial</button>
+        <button class="btn-cancel mt-2" id="serialDisconnectBtn" onclick="disconnectSerial()" style="display:none;">✕ Disconnect</button>
+      </div>
     </div>
 
     <div class="glass-card p-4 mb-4">
@@ -423,6 +467,7 @@
     const STATUS_CHAR_UUID = '12345678-1234-5678-1234-56789abcdef2';
     const CHUNK_SIZE = 490; // bytes per BLE write (keep under 512 MTU)
     const ACK_TIMEOUT_MS = 2000; // how long to wait for a board status notification
+    const SERIAL_CHUNK_SIZE = 256; // safe at the firmware's 115200 baud rate
 
     // ── State ─────────────────────────────────────────────────────────────────────
     let bleDevice = null;
@@ -431,9 +476,14 @@
     let fileData = null;
     let selectedMedia = null;
     let previewUrl = null;
-    let bleBoards = [];
+    let allBoards = [];
+    let availableBoards = [];
     let uploadAborted = false;   // set true if the board reports an error mid-transfer
     let pendingAck = null;    // resolver for the status notification we're waiting on
+    let uploadMode = 'bluetooth';
+    let serialPort = null;
+    let serialReader = null;
+    let serialPendingMessage = null;
 
     // ── Elements ──────────────────────────────────────────────────────────────────
     const scanBtn = document.getElementById('scanBtn');
@@ -460,6 +510,61 @@
     const previewFrame = document.getElementById('mediaPreviewFrame');
     const imagePreview = document.getElementById('imagePreview');
     const videoPreview = document.getElementById('videoPreview');
+    const videoSeekRow = document.getElementById('videoSeekRow');
+    const videoSeek = document.getElementById('videoSeek');
+    const videoTime = document.getElementById('videoTime');
+    const bluetoothModeBtn = document.getElementById('bluetoothModeBtn');
+    const serialModeBtn = document.getElementById('serialModeBtn');
+    const serialConnectSection = document.getElementById('serialConnectSection');
+    const serialConnectBtn = document.getElementById('serialConnectBtn');
+    const serialDisconnectBtn = document.getElementById('serialDisconnectBtn');
+
+    const formatVideoTime = seconds => {
+      if (!Number.isFinite(seconds)) return '0:00';
+      return `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`;
+    };
+    videoPreview.addEventListener('loadedmetadata', () => {
+      videoSeek.max = videoPreview.duration || 0;
+      videoPreview.currentTime = Math.min(1, (videoPreview.duration || 2) / 4);
+      videoSeek.value = videoPreview.currentTime;
+      videoTime.lastElementChild.textContent = formatVideoTime(videoPreview.duration);
+      videoSeekRow.style.display = 'block';
+    });
+    videoPreview.addEventListener('timeupdate', () => {
+      if (!videoSeek.matches(':active')) videoSeek.value = videoPreview.currentTime;
+      videoTime.firstElementChild.textContent = formatVideoTime(videoPreview.currentTime);
+    });
+    videoSeek.addEventListener('input', () => { videoPreview.currentTime = Number(videoSeek.value); });
+
+    bluetoothModeBtn.addEventListener('click', () => setUploadMode('bluetooth'));
+    serialModeBtn.addEventListener('click', () => setUploadMode('serial'));
+
+    function setUploadMode(mode) {
+      uploadMode = mode;
+      const serial = mode === 'serial';
+      bluetoothModeBtn.classList.toggle('active', !serial);
+      serialModeBtn.classList.toggle('active', serial);
+      document.getElementById('modeKicker').textContent = serial ? 'wired upload · esp32' : 'wireless upload · esp32-2432s028';
+      document.getElementById('modeTitle').textContent = serial ? 'Serial Upload' : 'Bluetooth Upload';
+      document.getElementById('modeDescription').textContent = serial
+        ? 'Choose any video or image, convert it locally, then upload video.dat through the ESP32 USB serial port.'
+        : 'Choose any video or image, convert it locally, then upload it to your ESP32 over BLE.';
+      convertBtn.textContent = serial ? '⚙ Convert for Serial Upload' : '⚙ Convert for Bluetooth Upload';
+      uploadBtn.textContent = serial ? '📤 Upload via USB Serial' : '📤 Upload via Bluetooth';
+      document.getElementById('boardLabel').textContent = serial ? 'Board' : 'Bluetooth board';
+      serialConnectSection.style.display = serial ? 'block' : 'none';
+      document.getElementById('notSupportedBanner').style.display = (!serial && !navigator.bluetooth) ? 'block' : 'none';
+      if (serial) {
+        scanSection.style.display = 'none';
+        connectedSection.style.display = 'none';
+      } else {
+        scanSection.style.display = bleDevice?.gatt?.connected ? 'none' : 'block';
+        connectedSection.style.display = bleDevice?.gatt?.connected ? 'block' : 'none';
+      }
+      setStatus('disconnected', '⬤ Disconnected');
+      renderBoardOptions();
+      refreshUploadBtn();
+    }
 
     function updatePreviewTransform() {
       const transform = `translate(${panXInput.value}px, ${panYInput.value}px) rotate(${rotationInput.value}deg) scale(${zoomInput.value})`;
@@ -487,26 +592,35 @@
       try {
         const response = await fetch('/api/firmware/envs');
         const envs = await response.json();
-        // Older already-running Electron backends do not yet return hasBle.
-        // Every built-in BLE profile also has an SD-card flag, so retain that
-        // safe fallback until the app is restarted with the newer parser.
-        const boards = envs.filter(env => env.isColor && (env.hasBle || env.hasSdCard));
-        bleBoards = boards;
-        boardSelect.innerHTML = '';
-        boards.forEach(env => {
-          const option = document.createElement('option');
-          option.value = env.id;
-          option.textContent = `${env.label} (${env.width}×${env.height})`;
-          boardSelect.appendChild(option);
-        });
-        if (!boards.length) {
-          boardSelect.innerHTML = '<option>No BLE-enabled board configured</option>';
-          convertBtn.disabled = true;
-        }
-        updatePreviewFrame();
+        allBoards = envs;
+        renderBoardOptions();
       } catch (error) {
         log(`❌ Could not load boards: ${error.message}`);
       }
+    }
+
+    function renderBoardOptions() {
+      const previous = boardSelect.value;
+      // Serial uses the same firmware transfer protocol on every configured
+      // environment. Bluetooth remains limited to profiles that enable BLE.
+      availableBoards = uploadMode === 'serial'
+        ? allBoards
+        : allBoards.filter(env => env.hasBle);
+      boardSelect.innerHTML = '';
+      availableBoards.forEach(env => {
+        const option = document.createElement('option');
+        option.value = env.id;
+        option.textContent = `${env.label} (${env.width}×${env.height})`;
+        boardSelect.appendChild(option);
+      });
+      if (!availableBoards.length) {
+        boardSelect.innerHTML = `<option>${uploadMode === 'serial' ? 'No boards configured' : 'No Bluetooth-enabled board configured'}</option>`;
+        convertBtn.disabled = true;
+        return;
+      }
+      boardSelect.value = availableBoards.some(env => env.id === previous) ? previous : availableBoards[0].id;
+      convertBtn.disabled = !selectedMedia;
+      updatePreviewFrame();
     }
 
     document.getElementById('videoFile').addEventListener('change', (e) => {
@@ -525,7 +639,7 @@
     boardSelect.addEventListener('change', updatePreviewFrame);
 
     function updatePreviewFrame() {
-      const board = bleBoards.find(item => item.id === boardSelect.value);
+      const board = availableBoards.find(item => item.id === boardSelect.value);
       if (!board) return;
       previewFrame.style.aspectRatio = `${board.width} / ${board.height}`;
     }
@@ -539,9 +653,14 @@
       if (isVideo) {
         videoPreview.src = previewUrl;
         videoPreview.currentTime = 0;
-        videoPreview.play().catch(() => {});
+        videoSeek.value = 0;
+        videoSeek.max = 0;
+        videoTime.firstElementChild.textContent = '0:00';
+        videoTime.lastElementChild.textContent = '0:00';
+        videoSeekRow.style.display = 'block';
       } else {
         imagePreview.src = previewUrl;
+        videoSeekRow.style.display = 'none';
       }
       updatePreviewFrame();
       updatePreviewTransform();
@@ -577,7 +696,7 @@
         fileData = await result.blob();
         document.getElementById('fileInfo').style.display = 'flex';
         document.getElementById('fileName').textContent = `video.dat (${formatBytes(fileData.size)})`;
-        log(`✅ Conversion complete: ${formatBytes(fileData.size)} ready for BLE upload.`);
+        log(`✅ Conversion complete: ${formatBytes(fileData.size)} ready for ${uploadMode === 'serial' ? 'USB serial' : 'Bluetooth'} upload.`);
         const estimatedSeconds = fileData.size / (490 / 0.025);
         if (estimatedSeconds > 300) {
           log(`⚠️ Estimated BLE transfer time: ${formatDuration(estimatedSeconds)}. Use a shorter video/lower FPS, or upload video.dat to the SD card directly.`);
@@ -615,7 +734,86 @@
 
     // ── Refresh upload button ──────────────────────────────────────────────────────
     function refreshUploadBtn() {
-      uploadBtn.disabled = !(fileData && fileData.size > 0 && bleChar);
+      const connected = uploadMode === 'serial' ? !!serialPort : !!bleChar;
+      uploadBtn.disabled = !(fileData && fileData.size > 0 && connected);
+    }
+
+    // ── USB serial connection + firmware protocol ───────────────────────────────
+    async function connectSerial() {
+      if (!('serial' in navigator)) {
+        log('❌ Web Serial is not supported. Use Chrome or Edge in the desktop app.');
+        return;
+      }
+      try {
+        serialPort = await navigator.serial.requestPort();
+        await serialPort.open({ baudRate: 115200 });
+        serialConnectBtn.style.display = 'none';
+        serialDisconnectBtn.style.display = 'block';
+        setStatus('connected', '⬤ USB Serial connected');
+        log('🔌 USB serial connected at 115200 baud.');
+        readSerialMessages();
+        refreshUploadBtn();
+      } catch (err) {
+        serialPort = null;
+        if (err.name !== 'AbortError') log(`❌ USB serial connection failed: ${err.message}`);
+      }
+    }
+
+    async function readSerialMessages() {
+      const decoder = new TextDecoder();
+      let buffer = '';
+      try {
+        serialReader = serialPort.readable.getReader();
+        while (serialPort && serialPort.readable) {
+          const { value, done } = await serialReader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split(/\r?\n/);
+          buffer = lines.pop();
+          for (const line of lines) handleSerialMessage(line.trim());
+        }
+      } catch (err) {
+        if (serialPort) log(`❌ USB serial disconnected: ${err.message}`);
+      } finally {
+        try { serialReader?.releaseLock(); } catch (_) { }
+        serialReader = null;
+      }
+    }
+
+    function handleSerialMessage(message) {
+      if (!message) return;
+      log(`🔌 Board: ${message}`);
+      if (serialPendingMessage?.test(message)) {
+        serialPendingMessage.resolve(message);
+        serialPendingMessage = null;
+      }
+    }
+
+    function waitForSerialMessage(pattern, timeout = 5000) {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          if (serialPendingMessage?.resolve === resolve) serialPendingMessage = null;
+          reject(new Error('The board did not respond. Flash firmware with Serial Upload support, then try again.'));
+        }, timeout);
+        serialPendingMessage = {
+          test: (message) => pattern.test(message),
+          resolve: (message) => { clearTimeout(timer); resolve(message); },
+        };
+      });
+    }
+
+    async function disconnectSerial() {
+      serialPendingMessage?.resolve?.('BAS:ERROR:DISCONNECTED');
+      serialPendingMessage = null;
+      try { if (serialReader) await serialReader.cancel(); } catch (_) { }
+      try { if (serialPort) await serialPort.close(); } catch (_) { }
+      serialReader = null;
+      serialPort = null;
+      serialConnectBtn.style.display = 'block';
+      serialDisconnectBtn.style.display = 'none';
+      setStatus('disconnected', '⬤ Disconnected');
+      log('🔌 USB serial disconnected.');
+      refreshUploadBtn();
     }
 
     // ── Scan & Connect ────────────────────────────────────────────────────────────
@@ -791,7 +989,9 @@
 
     // ── Upload ────────────────────────────────────────────────────────────────────
     async function uploadFile() {
-      if (!fileData || !bleChar) return;
+      if (!fileData) return;
+      if (uploadMode === 'serial') return uploadViaSerial();
+      if (!bleChar) return;
 
       uploadBtn.disabled = true;
       progressWrap.style.display = 'block';
@@ -857,6 +1057,82 @@
         log(`❌ Upload failed: ${err.message}`);
       } finally {
         uploadBtn.disabled = false;
+      }
+    }
+
+    async function uploadViaSerial() {
+      if (!fileData || !serialPort?.writable) return;
+
+      uploadBtn.disabled = true;
+      progressWrap.style.display = 'block';
+      progressBar.style.width = '0%';
+      progressPct.textContent = '0%';
+      setStatus('sending', '⬤ Uploading via USB...');
+      const totalBytes = fileData.size;
+      log(`📤 Starting USB serial upload: ${totalBytes} bytes...`);
+
+      try {
+        // Send load_serial to pause video playback on boards that support it.
+        // Old firmware ignores this silently — safe to send regardless.
+        await writeSerial(new TextEncoder().encode('load_serial\n'));
+        await sleep(400); // give the board time to stop the video and settle
+
+        // Tell the board how much data is coming so it can pick SPIFFS vs SD.
+        // STRICT regex: must match OK:SPIFFS, OK:SD, or ERROR. (Prevents catching delayed OK:READY)
+        const startResponse = waitForSerialMessage(/^BAS:(OK:SPIFFS|OK:SD|ERROR:)/, 15000);
+        const forceSd = document.getElementById('bleUseSdCard').checked ? ':SD' : '';
+        await writeSerial(new TextEncoder().encode(`BAS:START:${totalBytes}${forceSd}\n`));
+        const start = await startResponse;
+        if (start.startsWith('BAS:ERROR:')) throw new Error(friendlyUploadError(start.replace('BAS:', '')));
+
+        if (start === 'BAS:OK:SD') {
+          log('💾 The board is writing the file to its SD card.');
+        }
+
+        // Use safe 128-byte chunks to prevent hardware UART FIFO overflow (128 bytes)
+        // during ESP32 internal flash page writes (which disable interrupts momentarily).
+        const CHUNK = 128;
+        const DELAY = 40; // ms between chunks
+        let sent = 0;
+
+        // Register the done-listener BEFORE the whole transfer so BAS:OK:DONE
+        // can never arrive before we start listening (race-condition fix).
+        const donePromise = waitForSerialMessage(/^BAS:(OK:DONE|ERROR:)/, 60000);
+
+        while (sent < totalBytes) {
+          const chunk = new Uint8Array(await fileData.slice(sent, sent + CHUNK).arrayBuffer());
+          await writeSerial(chunk);
+          sent += chunk.byteLength;
+
+          const pct = Math.round((sent / totalBytes) * 100);
+          progressBar.style.width = pct + '%';
+          progressPct.textContent = pct + '%';
+          progressLabel.textContent = `Sending... ${(sent / 1024).toFixed(1)} KB / ${(totalBytes / 1024).toFixed(1)} KB`;
+          if (sent < totalBytes) await sleep(DELAY);
+        }
+
+        progressLabel.textContent = 'Waiting for board confirmation...';
+        const done = await donePromise;
+        if (done.startsWith('BAS:ERROR:')) throw new Error(friendlyUploadError(done.replace('BAS:', '')));
+        setStatus('done', '⬤ Done!');
+        progressLabel.textContent = 'Upload complete!';
+        log(`✅ USB serial upload complete: ${(totalBytes / 1024).toFixed(1)} KB sent.`);
+        log('🎬 Board is now reloading video.dat — watch your display!');
+      } catch (err) {
+        setStatus('error', '⬤ Error');
+        log(`❌ USB serial upload failed: ${err.message}`);
+      } finally {
+        refreshUploadBtn();
+      }
+    }
+
+
+    async function writeSerial(data) {
+      const writer = serialPort.writable.getWriter();
+      try {
+        await writer.write(data);
+      } finally {
+        writer.releaseLock();
       }
     }
 

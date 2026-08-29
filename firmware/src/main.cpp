@@ -190,12 +190,12 @@ uint32_t            receivedUploadBytes = 0;
 // onboard limit, otherwise falls back to the SD card. Returns false (with no
 // file opened) if neither target has room — the caller reports this upstream
 // so the user knows to insert/replace the microSD card.
-bool beginVideoReceive(uint32_t expectedBytes) {
+bool beginVideoReceive(uint32_t expectedBytes, bool forceSD = false) {
   if (videoFile) videoFile.close();
   expectedUploadBytes = expectedBytes;
   receivedUploadBytes = 0;
 
-  if ((uint64_t)expectedBytes + SPIFFS_RESERVE_BYTES <= spiffsFreeBytes()) {
+  if (!forceSD && (uint64_t)expectedBytes + SPIFFS_RESERVE_BYTES <= spiffsFreeBytes()) {
     videoFile = SPIFFS.open("/video.dat", "w");
     if (!videoFile) { uploadTarget = UploadTarget::NONE; return false; }
     uploadTarget     = UploadTarget::SPIFFS_TARGET;
@@ -233,6 +233,86 @@ void endVideoReceive(bool aborted) {
     reloadVideo();
   }
   uploadTarget = UploadTarget::NONE;
+}
+
+// ── USB serial upload ───────────────────────────────────────────────────────
+// Protocol: send `BAS:START:<byte-count>\n`, wait for BAS:OK:<target>, then
+// ── USB serial upload ───────────────────────────────────────────────────────
+// Protocol: send `load_serial` or `BAS:START:<byte-count>[:SD]\n`, wait for
+// BAS:OK:<target>, then write exactly byte-count raw video.dat bytes. The board
+// responds BAS:OK:DONE once the file has been safely closed and reloaded.
+static char serialCommand[48];
+static size_t serialCommandLength = 0;
+static uint32_t lastSerialRxTime = 0;
+
+static void handleSerialUpload() {
+  if (isReceivingVideo) {
+    uint8_t buffer[512];
+    const size_t avail = Serial.available();
+    if (avail > 0) {
+      lastSerialRxTime = millis();
+      const size_t count = min(avail, sizeof(buffer));
+      const size_t read = Serial.readBytes((char*)buffer, count);
+      const size_t written = videoFile ? videoFile.write(buffer, read) : 0;
+      receivedUploadBytes += written;
+      yield();
+
+      if (written != read) {
+        Serial.println("BAS:ERROR:WRITE_FAIL");
+        endVideoReceive(true);
+      } else if (receivedUploadBytes >= expectedUploadBytes) {
+        if (videoFile) videoFile.flush();
+        const bool complete = (receivedUploadBytes == expectedUploadBytes);
+        endVideoReceive(!complete);
+        Serial.println(complete ? "BAS:OK:DONE" : "BAS:ERROR:SIZE_MISMATCH");
+      }
+    } else if (receivedUploadBytes > 0 && (millis() - lastSerialRxTime > 15000)) {
+      Serial.printf("BAS:ERROR:TIMEOUT:%u/%u\n", receivedUploadBytes, expectedUploadBytes);
+      endVideoReceive(true);
+    }
+    return;
+  }
+
+  while (Serial.available()) {
+    const char c = (char)Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (!serialCommandLength) continue;
+      serialCommand[serialCommandLength] = '\0';
+
+      if (strcmp(serialCommand, "load_serial") == 0 || strcmp(serialCommand, "BAS:LOAD_SERIAL") == 0) {
+        if (videoFile) videoFile.close();
+        isReceivingVideo = false;
+        Serial.println("BAS:OK:READY");
+      } else {
+        const char* prefix = "BAS:START:";
+        const char* prefix2 = "load_serial:";
+        const char* args = nullptr;
+        if (strncmp(serialCommand, prefix, strlen(prefix)) == 0) {
+          args = serialCommand + strlen(prefix);
+        } else if (strncmp(serialCommand, prefix2, strlen(prefix2)) == 0) {
+          args = serialCommand + strlen(prefix2);
+        }
+
+        if (args) {
+          const uint32_t size = (uint32_t)strtoul(args, nullptr, 10);
+          bool forceSD = (strstr(args, ":SD") != nullptr || strstr(args, ":sd") != nullptr);
+          if (!size) {
+            Serial.println("BAS:ERROR:BAD_SIZE");
+          } else if (beginVideoReceive(size, forceSD)) {
+            lastSerialRxTime = millis();
+            Serial.println(uploadTargetIsSD() ? "BAS:OK:SD" : "BAS:OK:SPIFFS");
+          } else {
+            Serial.println("BAS:ERROR:NO_SPACE");
+          }
+        }
+      }
+      serialCommandLength = 0;
+    } else if (serialCommandLength < sizeof(serialCommand) - 1) {
+      serialCommand[serialCommandLength++] = c;
+    } else {
+      serialCommandLength = 0;
+    }
+  }
 }
 
 
@@ -426,6 +506,7 @@ static void renderFrame1Bit() {
 
 // ── setup ─────────────────────────────────────────────────────────────────────
 void setup() {
+  Serial.setRxBufferSize(4096);
   Serial.begin(115200);
 
 #if defined(DISPLAY_DRIVER_TFT) || defined(DISPLAY_DRIVER_ILI9341) || defined(DISPLAY_DRIVER_ST7789)
@@ -485,6 +566,7 @@ void setup() {
 
   Serial.printf("Video %ux%u, %u frames, %u fps\n",
                 header.width, header.height, header.frameCount, header.fps);
+  Serial.println("BAS:READY");
 
   lastFrameAt = millis();
   
@@ -498,11 +580,14 @@ static uint32_t currentFrame = 0;
 
 // ── loop ──────────────────────────────────────────────────────────────────────
 void loop() {
+  handleSerialUpload();
+
 #ifdef HAS_BLE
   if (isReceivingVideo) {
     return; // Pause playback during BLE transfer
   }
 #endif
+  if (isReceivingVideo) return; // Pause playback during USB serial transfer
   uint32_t now = millis();
   if (now - lastFrameAt < frameIntervalMs) return;
   lastFrameAt += frameIntervalMs;
@@ -511,7 +596,9 @@ void loop() {
     if (readAndRenderColorFrame()) {
       currentFrame++;
       if (currentFrame >= header.frameCount) currentFrame = 0;
+#ifdef DEBUG_FRAME_STREAM
       Serial.printf("FRAME:%u/%u\n", currentFrame, header.frameCount);
+#endif
     }
   } else {
 #if defined(DISPLAY_DRIVER_SSD1306) || defined(DISPLAY_DRIVER_SH1106) || defined(DISPLAY_DRIVER_U8G2_CUSTOM)
@@ -522,11 +609,16 @@ void loop() {
     renderFrame1Bit();
     currentFrame++;
     
+    // Serial output is much slower than I2C. Streaming a whole OLED frame as
+    // hex takes ~180 ms at 115200 baud and causes visible playback stutter.
+    // Enable this only in a dedicated debug build when the desktop monitor
+    // needs frame data.
+#ifdef DEBUG_FRAME_STREAM
     static uint32_t lastDebugTime = 0;
     if (millis() - lastDebugTime > 250) {
       lastDebugTime = millis();
       Serial.printf("FRAME:%u/%u\nFRAME_DATA:", currentFrame, header.frameCount);
-      
+
       const char hexMap[] = "0123456789ABCDEF";
       char outBuf[65];
       outBuf[64] = 0;
@@ -542,6 +634,7 @@ void loop() {
     } else {
       Serial.printf("FRAME:%u/%u\n", currentFrame, header.frameCount);
     }
+#endif
 #endif
   }
 }

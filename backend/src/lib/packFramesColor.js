@@ -7,7 +7,7 @@ const { buildTransformFilter } = require('./ffmpegExtract');
 
 const HEADER_SIZE = 16;
 
-async function extractFramesColor(videoPath, outDir, { fps, width, height, isImage, duration = 0, rotation = 0, zoom = 1.0, panX = 0, panY = 0 }) {
+async function extractFramesColor(videoPath, outDir, { fps, width, height, isImage, duration = 0, rotation = 0, zoom = 1.0, panX = 0, panY = 0, onLog }) {
   fs.mkdirSync(outDir, { recursive: true });
   const rawFile = path.join(outDir, 'video_rgb565.raw');
 
@@ -26,7 +26,7 @@ async function extractFramesColor(videoPath, outDir, { fps, width, height, isIma
 
   args.push('-vf', scaleFilter, '-pix_fmt', 'rgb565le', '-f', 'rawvideo', rawFile);
 
-  await run('ffmpeg', args);
+  await run('ffmpeg', args, { onOutput: onLog });
 
   if (!fs.existsSync(rawFile)) {
     throw new Error('ffmpeg produced no raw file. Verify the video file is valid.');

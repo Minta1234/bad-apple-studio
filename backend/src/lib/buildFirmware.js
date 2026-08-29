@@ -105,7 +105,7 @@ function prepareWorkspace(jobDir) {
   return workDir;
 }
 
-async function compileFirmware({ jobDir, env, videoDatPath, forSdCard, onProgress }) {
+async function compileFirmware({ jobDir, env, videoDatPath, forSdCard, onProgress, onLog }) {
   resolveEnv(env);
   const workDir = prepareWorkspace(jobDir);
 
@@ -115,7 +115,7 @@ async function compileFirmware({ jobDir, env, videoDatPath, forSdCard, onProgres
 
   // A job must never reach the flasher with an unbuilt board.  This also
   // covers boards added while the browser-side precompile queue is not open.
-  const precompileResult = await preCompileEnv(env, onProgress);
+  const precompileResult = await preCompileEnv(env, onProgress, onLog);
   if (precompileResult.error) throw new Error(`Firmware compile failed for [env:${env}]: ${precompileResult.error}`);
   const precompiled = true;
   const globalBuildOut = path.join(FIRMWARE_TEMPLATE, '.pio', 'build', env);
@@ -129,7 +129,7 @@ async function compileFirmware({ jobDir, env, videoDatPath, forSdCard, onProgres
   }
 
   onProgress?.('Building SPIFFS image...');
-  await run('pio', ['run', '-t', 'buildfs', '-e', env], { cwd: workDir });
+  await run('pio', ['run', '-t', 'buildfs', '-e', env], { cwd: workDir, onOutput: onLog });
 
   const files = {
     bootloader: precompiled ? path.join(globalBuildOut, 'bootloader.bin') : path.join(localBuildOut, 'bootloader.bin'),
@@ -161,7 +161,7 @@ function isBoardPreCompiled(envName) {
  * Returns { compiled: true/false, error?: string }.
  * The optional onProgress callback receives log lines.
  */
-async function preCompileEnv(envName, onProgress) {
+async function preCompileEnv(envName, onProgress, onLog) {
   // Validate that the env exists in platformio.ini
   resolveEnv(envName);
 
@@ -177,7 +177,7 @@ async function preCompileEnv(envName, onProgress) {
   const build = (async () => {
     onProgress?.(`Compiling firmware for [env:${envName}]...`);
     try {
-      await run('pio', ['run', '-e', envName], { cwd: FIRMWARE_TEMPLATE });
+      await run('pio', ['run', '-e', envName], { cwd: FIRMWARE_TEMPLATE, onOutput: onLog });
       onProgress?.(`✓ [env:${envName}] compiled successfully.`);
       return { compiled: true };
     } catch (err) {

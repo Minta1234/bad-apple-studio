@@ -27,7 +27,7 @@ function buildTransformFilter(width, height, zoom = 1.0, panX = 0, panY = 0, rot
 }
 
 // Extract video as 8-bit grayscale frames (.pgm), resized + letterboxed to fit width x height
-async function extractFrames(videoPath, outDir, { fps, width, height, isImage, duration = 0, rotation = 0, zoom = 1.0, panX = 0, panY = 0 }) {
+async function extractFrames(videoPath, outDir, { fps, width, height, isImage, duration = 0, rotation = 0, zoom = 1.0, panX = 0, panY = 0, onLog }) {
   fs.mkdirSync(outDir, { recursive: true });
 
   const transform = buildTransformFilter(width, height, zoom, panX, panY, rotation);
@@ -46,7 +46,7 @@ async function extractFrames(videoPath, outDir, { fps, width, height, isImage, d
 
   args.push('-vf', filter, '-f', 'image2', path.join(outDir, 'frame_%06d.pgm'));
 
-  await run('ffmpeg', args);
+  await run('ffmpeg', args, { onOutput: onLog });
 
   const frames = fs.readdirSync(outDir)
     .filter((f) => f.endsWith('.pgm'))

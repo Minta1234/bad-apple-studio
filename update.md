@@ -1,5 +1,21 @@
 # Bad Apple Studio — Update Log
 
+## v4.0.0 — Color Previews & Reliable USB Serial Uploads
+
+### 🖥️ Desktop App (Electron)
+- **USB Serial Upload Stabilization**:
+  - Fixed a critical race condition that caused the ESP32 to crash (`POWERON_RESET`) or timeout during serial uploads.
+  - **Buffer Optimization**: Reverted to safe 128-byte chunks with 40ms delays to prevent the ESP32's Hardware UART FIFO (128 bytes) from overflowing while the internal flash (SPIFFS) is busy writing data.
+  - **Handshake Protocol**: Implemented the `load_serial` command to gracefully pause the video rendering loop on the board before starting an upload.
+- **Accurate Color Previews**:
+  - Replaced the old 1-bit B&W preview with a full RGB565 accurate color preview generation in the backend, matching exactly what the CYD color screens will display.
+- **UI Enhancements**:
+  - Clarified the "Use SD card" checkbox to correctly indicate it works for both BLE and Serial USB uploads.
+
+### 📱 Android APK
+- *(No major changes in v4.0.0)* The Android app continues to use the stable BLE upload pipeline introduced in v2.1.0. Future updates will align the APK's preview system with the new RGB565 color preview logic.
+
+
 ## v3.0.0 — Zero-Config Setup, Auto-Compile & Build Optimizations
 
 ### 🚀 Zero-Configuration Dependency Bootstrap
