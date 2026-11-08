@@ -364,3 +364,4 @@ jobs:
             --notes-file release_notes.md
 
           echo "Release v${VERSION} published successfully!"
+
