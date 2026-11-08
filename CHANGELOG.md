@@ -9,6 +9,14 @@
 
 
 
+
+## v4.5.2
+
+### 🐛 Bug Fixes & Stability
+- add 2KB RAM write buffer, status notification listening, and safe packet pacing (7cebed0)
+
+---
+
 ## v4.5.1
 
 ### 🐛 Bug Fixes & Stability
