@@ -8,8 +8,22 @@ on:
       - 'release*'
   workflow_dispatch:
     inputs:
+      bump_type:
+        description: 'Auto-bump version before release'
+        required: false
+        type: choice
+        default: 'none'
+        options:
+          - 'none'
+          - 'patch'
+          - 'minor'
+          - 'major'
+      custom_version:
+        description: 'Or specify custom version (e.g. 4.0.2)'
+        required: false
+        default: ''
       tag_name:
-        description: 'Tag name (leave empty to use ReleaseV<version> from package.json)'
+        description: 'Tag name (leave empty to use ReleaseV<version>)'
         required: false
         default: ''
       release_title:
@@ -31,12 +45,75 @@ permissions:
   contents: write
 
 jobs:
+  prepare:
+    name: Prepare & Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version_step.outputs.version }}
+      tag: ${{ steps.version_step.outputs.tag }}
+      ref: ${{ steps.version_step.outputs.ref }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Bump Version if requested
+        id: version_step
+        run: |
+          BUMP="${{ github.event.inputs.bump_type }}"
+          CUSTOM="${{ github.event.inputs.custom_version }}"
+
+          if [ -n "$CUSTOM" ]; then
+            echo "Applying custom version: $CUSTOM"
+            node scripts/bump-version.js "$CUSTOM"
+          elif [ -n "$BUMP" ] && [ "$BUMP" != "none" ]; then
+            echo "Applying $BUMP version bump..."
+            node scripts/bump-version.js "$BUMP"
+          fi
+
+          VERSION=$(node -p "require('./package.json').version")
+          echo "Current Version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          # Determine Tag
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+          elif [ -n "${{ github.event.inputs.tag_name }}" ]; then
+            TAG="${{ github.event.inputs.tag_name }}"
+          else
+            TAG="ReleaseV${VERSION}"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+          # If version was bumped, commit and push back to repository
+          if { [ -n "$CUSTOM" ] || { [ -n "$BUMP" ] && [ "$BUMP" != "none" ]; }; }; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add package.json package-lock.json App/android/app/build.gradle.kts CHANGELOG.md || true
+            git commit -m "chore(release): bump version to ${VERSION}"
+            git push origin HEAD:main
+            git tag -a "$TAG" -m "Release v${VERSION}"
+            git push origin "$TAG" --force
+            echo "ref=$TAG" >> $GITHUB_OUTPUT
+          else
+            echo "ref=${{ github.ref }}" >> $GITHUB_OUTPUT
+          fi
+
   build-windows:
     name: Build Windows App (.exe & .zip)
+    needs: [prepare]
     runs-on: windows-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -68,10 +145,13 @@ jobs:
 
   build-android:
     name: Build Android App (.apk)
+    needs: [prepare]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -91,7 +171,7 @@ jobs:
       - name: Prepare Android artifacts
         run: |
           mkdir -p android-dist
-          VERSION=$(node -p "require('./package.json').version")
+          VERSION="${{ needs.prepare.outputs.version }}"
           APK_FILE=$(find App/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
           if [ -z "$APK_FILE" ]; then
             echo "Error: No release APK found!"
@@ -111,12 +191,13 @@ jobs:
 
   create-release:
     name: Create GitHub Release
-    needs: [build-windows, build-android]
+    needs: [prepare, build-windows, build-android]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ needs.prepare.outputs.ref }}
           fetch-depth: 0
 
       - name: Setup Node.js
@@ -137,17 +218,8 @@ jobs:
           echo "Files to upload:"
           ls -la release-files/
 
-          VERSION=$(node -p "require('./package.json').version")
-          echo "Detected version: $VERSION"
-
-          # Determine Tag Name
-          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref_type }}" = "tag" ]; then
-            TAG_NAME="${{ github.ref_name }}"
-          elif [ -n "${{ github.event.inputs.tag_name }}" ]; then
-            TAG_NAME="${{ github.event.inputs.tag_name }}"
-          else
-            TAG_NAME="ReleaseV${VERSION}"
-          fi
+          VERSION="${{ needs.prepare.outputs.version }}"
+          TAG_NAME="${{ needs.prepare.outputs.tag }}"
           echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
 
           # Determine Release Title
@@ -206,4 +278,3 @@ jobs:
           files: release-files/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
