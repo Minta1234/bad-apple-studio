@@ -11,6 +11,14 @@
 
 
 
+
+## v4.6.0
+
+### 🚀 New Features
+- add BLE firmware upload manager and conversion backend support (4c693e7)
+
+---
+
 ## v4.5.3
 
 ### 🐛 Bug Fixes & Stability
