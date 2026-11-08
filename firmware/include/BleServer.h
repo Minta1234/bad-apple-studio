@@ -16,7 +16,7 @@ extern bool     isReceivingVideo;
 extern uint32_t expectedUploadBytes;
 extern uint32_t receivedUploadBytes;
 extern void     reloadVideo();
-extern bool     beginVideoReceive(uint32_t expectedBytes);
+extern bool     beginVideoReceive(uint32_t expectedBytes, bool forceSD = false);
 extern void     endVideoReceive(bool aborted);
 extern bool     uploadTargetIsSD();
 

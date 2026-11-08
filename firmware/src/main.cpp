@@ -190,7 +190,7 @@ uint32_t            receivedUploadBytes = 0;
 // onboard limit, otherwise falls back to the SD card. Returns false (with no
 // file opened) if neither target has room — the caller reports this upstream
 // so the user knows to insert/replace the microSD card.
-bool beginVideoReceive(uint32_t expectedBytes, bool forceSD = false) {
+bool beginVideoReceive(uint32_t expectedBytes, bool forceSD) {
   if (videoFile) videoFile.close();
   expectedUploadBytes = expectedBytes;
   receivedUploadBytes = 0;
