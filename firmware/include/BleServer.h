@@ -46,12 +46,28 @@ class ServerCallbacks: public BLEServerCallbacks {
     }
 };
 
+static uint8_t bleWriteBuf[2048];
+static size_t  bleWriteBufLen = 0;
+
+static void flushBleBuffer() {
+    if (bleWriteBufLen > 0 && videoFile) {
+        size_t written = videoFile.write(bleWriteBuf, bleWriteBufLen);
+        if (written != bleWriteBufLen) {
+            Serial.println("BLE: write failed mid-transfer — aborting");
+            endVideoReceive(true);
+            notifyStatus("ERROR:WRITE_FAIL");
+        }
+        bleWriteBufLen = 0;
+    }
+}
+
 class CharacteristicCallbacks: public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic* pCharacteristic) override {
         std::string rxValue = pCharacteristic->getValue();
         if (rxValue.empty()) return;
 
         if (rxValue.rfind("START:", 0) == 0) {
+            bleWriteBufLen = 0;
             uint32_t expectedBytes = (uint32_t)strtoul(rxValue.c_str() + 6, nullptr, 10);
             if (expectedBytes == 0) {
                 Serial.println("BLE: START with invalid/zero size");
@@ -68,6 +84,7 @@ class CharacteristicCallbacks: public BLECharacteristicCallbacks {
             }
 
         } else if (rxValue == "END") {
+            flushBleBuffer();
             isReceivingVideo = false;
             bool complete = (receivedUploadBytes == expectedUploadBytes);
             endVideoReceive(!complete);
@@ -82,12 +99,21 @@ class CharacteristicCallbacks: public BLECharacteristicCallbacks {
 
         } else {
             if (isReceivingVideo && videoFile) {
-                size_t written = videoFile.write((const uint8_t*)rxValue.data(), rxValue.length());
-                receivedUploadBytes += written;
-                if (written != rxValue.length()) {
-                    Serial.println("BLE: write failed mid-transfer — aborting");
-                    endVideoReceive(true);
-                    notifyStatus("ERROR:WRITE_FAIL");
+                const uint8_t* data = (const uint8_t*)rxValue.data();
+                size_t len = rxValue.length();
+                receivedUploadBytes += len;
+
+                while (len > 0) {
+                    size_t space = sizeof(bleWriteBuf) - bleWriteBufLen;
+                    size_t toCopy = (len < space) ? len : space;
+                    memcpy(bleWriteBuf + bleWriteBufLen, data, toCopy);
+                    bleWriteBufLen += toCopy;
+                    data += toCopy;
+                    len -= toCopy;
+
+                    if (bleWriteBufLen >= sizeof(bleWriteBuf)) {
+                        flushBleBuffer();
+                    }
                 }
             }
         }

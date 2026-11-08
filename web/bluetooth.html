@@ -1106,8 +1106,8 @@
             progressPct.textContent = pct + '%';
             progressLabel.textContent = `Sending... ${(sent / 1024).toFixed(1)} KB / ${(totalBytes / 1024).toFixed(1)} KB`;
 
-            // Delay to avoid overwhelming the ESP32 BLE buffer
-            await sleep(25);
+            // Delay to avoid overwhelming the ESP32 BLE buffer (35ms ensures SPIFFS flash write keeps up)
+            await sleep(35);
           } catch (writeErr) {
             retryCount++;
             if (retryCount > MAX_RETRIES) throw writeErr;

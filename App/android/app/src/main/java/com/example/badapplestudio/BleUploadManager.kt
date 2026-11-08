@@ -36,6 +36,8 @@ class BleUploadManager(private val context: Context) {
     // UUIDs must match the ESP32 BleServer.h
     private val SERVICE_UUID = UUID.fromString("12345678-1234-5678-1234-56789abcdef0")
     private val CHAR_UUID = UUID.fromString("12345678-1234-5678-1234-56789abcdef1")
+    private val STATUS_UUID = UUID.fromString("12345678-1234-5678-1234-56789abcdef2")
+    private val CCCD_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
     fun scanDevices(): Flow<BluetoothDevice> = callbackFlow {
         val currentScanner = scanner
@@ -94,6 +96,7 @@ class BleUploadManager(private val context: Context) {
         val totalBytes = datFile.length().toInt()
         var bytesUploaded = 0
         var startTime = 0L
+        var isCompleted = false
 
         val gattCallback = object : BluetoothGattCallback() {
             private var uploadCharacteristic: BluetoothGattCharacteristic? = null
@@ -102,21 +105,25 @@ class BleUploadManager(private val context: Context) {
             private val MAX_RETRIES = 3
             private var lastChunk: ByteArray? = null
             private var chunkSize = 180 // Safe default; updated after MTU negotiation
-            
+            private var uploadStarted = false
+
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     gatt.requestMtu(512) // Request maximum MTU
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                     fis?.close()
-                    onComplete(false, "Disconnected")
+                    if (!isCompleted) {
+                        isCompleted = true
+                        onComplete(false, "Disconnected")
+                    }
                     gatt.close()
                 }
             }
 
             override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
                 if (status == BluetoothGatt.GATT_SUCCESS) {
-                    // ATT header is 3 bytes, so usable payload = MTU - 3
-                    chunkSize = (mtu - 3).coerceAtMost(490).coerceAtLeast(20)
+                    // Cap at 240 bytes to ensure SPIFFS flash writes keep up and never drop bytes in the air
+                    chunkSize = (mtu - 3).coerceAtMost(240).coerceAtLeast(20)
                     android.util.Log.i("BleUpload", "MTU negotiated: $mtu → chunkSize=$chunkSize")
                 }
                 gatt.discoverServices()
@@ -126,30 +133,97 @@ class BleUploadManager(private val context: Context) {
                 if (status == BluetoothGatt.GATT_SUCCESS) {
                     val service = gatt.getService(SERVICE_UUID)
                     uploadCharacteristic = service?.getCharacteristic(CHAR_UUID)
-                    
-                    if (uploadCharacteristic != null) {
-                        // 1. Send START command (use acknowledged write for commands)
-                        val startCmd = "START:$totalBytes".toByteArray()
-                        uploadCharacteristic!!.value = startCmd
-                        uploadCharacteristic!!.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                        gatt.writeCharacteristic(uploadCharacteristic)
+                    val statusChar = service?.getCharacteristic(STATUS_UUID)
+
+                    if (statusChar != null) {
+                        gatt.setCharacteristicNotification(statusChar, true)
+                        val descriptor = statusChar.getDescriptor(CCCD_UUID)
+                        if (descriptor != null) {
+                            descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                            gatt.writeDescriptor(descriptor)
+                        } else {
+                            startUploadSequence(gatt)
+                        }
                     } else {
-                        onComplete(false, "Characteristic not found")
-                        gatt.disconnect()
+                        startUploadSequence(gatt)
                     }
+                } else {
+                    if (!isCompleted) {
+                        isCompleted = true
+                        onComplete(false, "Service discovery failed")
+                    }
+                    gatt.disconnect()
+                }
+            }
+
+            override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+                startUploadSequence(gatt)
+            }
+
+            private fun startUploadSequence(gatt: BluetoothGatt) {
+                if (uploadStarted) return
+                uploadStarted = true
+                val characteristic = uploadCharacteristic
+                if (characteristic != null) {
+                    val startCmd = "START:$totalBytes".toByteArray()
+                    characteristic.value = startCmd
+                    characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                    gatt.writeCharacteristic(characteristic)
+                } else {
+                    if (!isCompleted) {
+                        isCompleted = true
+                        onComplete(false, "Upload characteristic not found")
+                    }
+                    gatt.disconnect()
+                }
+            }
+
+            @Deprecated("Deprecated in Java")
+            override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
+                handleStatusNotification(gatt, characteristic.value)
+            }
+
+            override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
+                handleStatusNotification(gatt, value)
+            }
+
+            private fun handleStatusNotification(gatt: BluetoothGatt, value: ByteArray?) {
+                if (value == null || isCompleted) return
+                val msg = String(value).trim()
+                android.util.Log.i("BleUpload", "Board notification: $msg")
+                if (msg == "OK:DONE") {
+                    isCompleted = true
+                    fis?.close()
+                    onComplete(true, null)
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        try { gatt.disconnect() } catch (_: Exception) {}
+                    }, 1200)
+                } else if (msg.startsWith("ERROR:")) {
+                    isCompleted = true
+                    fis?.close()
+                    val friendly = when (msg) {
+                        "ERROR:SIZE_MISMATCH" -> "Transfer incomplete — some data was lost in the air. Move closer to the board and try again."
+                        "ERROR:NO_SPACE" -> "Not enough free storage on the board for this file."
+                        "ERROR:WRITE_FAIL" -> "Storage write failed mid-transfer (flash/SD error)."
+                        "ERROR:BAD_SIZE" -> "Board rejected the file size."
+                        else -> msg
+                    }
+                    onComplete(false, friendly)
+                    try { gatt.disconnect() } catch (_: Exception) {}
                 }
             }
 
             override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
                 if (status != BluetoothGatt.GATT_SUCCESS) {
-                    // Retry on failure instead of immediate disconnect
                     retryCount++
                     if (retryCount > MAX_RETRIES) {
-                        onComplete(false, "Write failed after $MAX_RETRIES retries (status $status)")
+                        if (!isCompleted) {
+                            isCompleted = true
+                            onComplete(false, "Write failed after $MAX_RETRIES retries (status $status)")
+                        }
                         gatt.disconnect()
                         return
                     }
-                    // Retry the last chunk after a delay
                     android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                         lastChunk?.let {
                             characteristic.value = it
@@ -159,27 +233,26 @@ class BleUploadManager(private val context: Context) {
                     return
                 }
 
-                retryCount = 0 // Reset retry count on success
+                retryCount = 0
                 val written = characteristic.value
                 val writtenString = String(written)
 
                 if (writtenString.startsWith("START:")) {
-                    // Start streaming data
                     startTime = System.currentTimeMillis()
                     fis = FileInputStream(datFile)
                     sendNextChunk(gatt, characteristic)
                 } else if (writtenString == "END") {
-                    // Upload complete
                     fis?.close()
-                    onComplete(true, null)
-                    // Allow ESP32 to finish writing, reloading, and rendering the new frame to the display
-                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                        try {
-                            gatt.disconnect()
-                        } catch (_: Exception) {}
-                    }, 1200)
+                    // Wait for board's OK:DONE / ERROR status notification, with 8s fallback timeout
+                    val handler = android.os.Handler(android.os.Looper.getMainLooper())
+                    handler.postDelayed({
+                        if (!isCompleted) {
+                            isCompleted = true
+                            onComplete(true, null)
+                            try { gatt.disconnect() } catch (_: Exception) {}
+                        }
+                    }, 8000)
                 } else {
-                    // A chunk was written, send the next
                     bytesUploaded += written.size
                     val elapsed = System.currentTimeMillis() - startTime
                     var speedStr = ""
@@ -191,26 +264,25 @@ class BleUploadManager(private val context: Context) {
                         speedStr = String.format("%.1f KB/s  •  %.1f / %.1f KB", speedKbps, uploadedKb, totalKb)
                     }
                     onProgress(bytesUploaded.toFloat() / totalBytes, speedStr)
-                    
-                    // Small delay to let ESP32 process the previous chunk
+
+                    // 35ms delay ensures ESP32 SPIFFS flash writes keep up and never drop bytes
                     android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                         sendNextChunk(gatt, characteristic)
-                    }, 15)
+                    }, 35)
                 }
             }
 
             private fun sendNextChunk(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
                 val buffer = ByteArray(chunkSize)
                 val bytesRead = fis?.read(buffer) ?: -1
-                
+
                 if (bytesRead > 0) {
                     val chunk = buffer.copyOf(bytesRead)
-                    lastChunk = chunk // Store for retry
+                    lastChunk = chunk
                     characteristic.value = chunk
                     characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
                     gatt.writeCharacteristic(characteristic)
                 } else {
-                    // Done reading file, send END
                     val endCmd = "END".toByteArray()
                     lastChunk = endCmd
                     characteristic.value = endCmd
