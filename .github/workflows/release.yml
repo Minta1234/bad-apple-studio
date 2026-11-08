@@ -9,11 +9,12 @@ on:
   workflow_dispatch:
     inputs:
       bump_type:
-        description: 'Auto-bump version before release'
+        description: 'Version bump mode (auto analyzes commits to write changelog)'
         required: false
         type: choice
-        default: 'none'
+        default: 'auto'
         options:
+          - 'auto'
           - 'none'
           - 'patch'
           - 'minor'
@@ -72,6 +73,9 @@ jobs:
           if [ -n "$CUSTOM" ]; then
             echo "Applying custom version: $CUSTOM"
             node scripts/bump-version.js "$CUSTOM"
+          elif [ "$BUMP" = "auto" ]; then
+            echo "Auto-detecting version bump and generating changelog..."
+            node scripts/auto-changelog.js
           elif [ -n "$BUMP" ] && [ "$BUMP" != "none" ]; then
             echo "Applying $BUMP version bump..."
             node scripts/bump-version.js "$BUMP"
@@ -96,7 +100,7 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add package.json package-lock.json App/android/app/build.gradle.kts CHANGELOG.md || true
-            git commit -m "chore(release): bump version to ${VERSION}"
+            git commit -m "chore(release): bump version to ${VERSION} [skip ci]"
             git push origin HEAD:main
             git tag -a "$TAG" -m "Release v${VERSION}"
             git push origin "$TAG" --force
