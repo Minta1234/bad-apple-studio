@@ -2,7 +2,9 @@ package com.example.badapplestudio
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -70,6 +72,7 @@ class MainActivity : ComponentActivity() {
     private var scannedDevices = mutableStateListOf<BluetoothDevice>()
     private var isScanning by mutableStateOf(false)
     private var isUploading by mutableStateOf(false)
+    private var isBluetoothOn by mutableStateOf(true)
     private var uploadProgress by mutableStateOf(0f)
     private var uploadSpeed by mutableStateOf("")
     private var connectedDevice by mutableStateOf<BluetoothDevice?>(null)
@@ -78,6 +81,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         bleManager = BleUploadManager(this)
+        isBluetoothOn = bleManager.isBluetoothEnabled
+
+        if (hasBlePermissions() && !isBluetoothOn) {
+            try {
+                enableBluetoothLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+            } catch (_: SecurityException) {}
+        }
 
         setContent {
             BadAppleStudioTheme {
@@ -166,11 +176,11 @@ class MainActivity : ComponentActivity() {
                          AnimatedVisibility(visible = conversionPath != null) {
                              ConnectCard(
                                  isScanning = isScanning,
+                                 isBluetoothEnabled = isBluetoothOn,
                                  scannedDevices = scannedDevices,
                                  connectedDevice = connectedDevice,
                                  onScan = {
-                                     if (hasBlePermissions()) startScan()
-                                     else requestPermissionsLauncher.launch(getBlePermissions())
+                                     checkBluetoothAndScan()
                                  },
                                  onCancelScan = {
                                      isScanning = false
@@ -204,11 +214,54 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        isBluetoothOn = bleManager.isBluetoothEnabled
+    }
+
+    private val enableBluetoothLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        isBluetoothOn = bleManager.isBluetoothEnabled
+        if (isBluetoothOn || result.resultCode == RESULT_OK) {
+            startScan()
+        } else {
+            Toast.makeText(this, "Bluetooth must be turned on to scan for devices", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private val requestPermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        if (permissions.entries.all { it.value }) startScan()
-        else Toast.makeText(this, "Bluetooth permissions required", Toast.LENGTH_SHORT).show()
+        if (permissions.entries.all { it.value }) {
+            checkBluetoothAndScan()
+        } else {
+            Toast.makeText(this, "Bluetooth permissions required", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun checkBluetoothAndScan() {
+        if (!hasBlePermissions()) {
+            requestPermissionsLauncher.launch(getBlePermissions())
+            return
+        }
+
+        if (!bleManager.isBluetoothAvailable) {
+            Toast.makeText(this, "Bluetooth is not supported on this device", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        isBluetoothOn = bleManager.isBluetoothEnabled
+        if (!isBluetoothOn) {
+            try {
+                enableBluetoothLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+            } catch (e: SecurityException) {
+                Toast.makeText(this, "Bluetooth permission required to enable Bluetooth", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+
+        startScan()
     }
 
     private var convertWorkId: java.util.UUID? = null
@@ -294,6 +347,21 @@ class MainActivity : ComponentActivity() {
         val datFile = File(path)
         if (!datFile.exists()) {
             Toast.makeText(this, "File not found", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        if (!hasBlePermissions()) {
+            requestPermissionsLauncher.launch(getBlePermissions())
+            return
+        }
+
+        isBluetoothOn = bleManager.isBluetoothEnabled
+        if (!isBluetoothOn) {
+            try {
+                enableBluetoothLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+            } catch (e: SecurityException) {
+                Toast.makeText(this, "Bluetooth permission required to enable Bluetooth", Toast.LENGTH_SHORT).show()
+            }
             return
         }
 
@@ -636,6 +704,7 @@ fun ConvertCard(
 @Composable
 fun ConnectCard(
     isScanning: Boolean,
+    isBluetoothEnabled: Boolean,
     scannedDevices: List<BluetoothDevice>,
     connectedDevice: BluetoothDevice?,
     onScan: () -> Unit,
@@ -643,6 +712,40 @@ fun ConnectCard(
     onSelectDevice: (BluetoothDevice) -> Unit
 ) {
     StepCard("Step 4: Connect to Board") {
+        if (!isBluetoothEnabled) {
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0)),
+                border = BorderStroke(1.dp, Color(0xFFFFB74D))
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f).padding(end = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically, 
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("⚠️", style = MaterialTheme.typography.titleMedium)
+                        Column {
+                            Text("Bluetooth is turned off", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall, color = Color(0xFFE65100))
+                            Text("Turn on Bluetooth to scan for boards", style = MaterialTheme.typography.labelSmall, color = Color(0xFFEF6C00))
+                        }
+                    }
+                    Button(
+                        onClick = onScan,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800)),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text("Turn On", color = Color.White, style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+        }
+
         Text(
             text = "Click scan to find your ESP32 board. If multiple boards are found, select one from the list below.",
             style = MaterialTheme.typography.bodySmall,

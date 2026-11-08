@@ -18,6 +18,13 @@ import java.util.UUID
 class BleUploadManager(private val context: Context) {
     private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
     private val bluetoothAdapter: BluetoothAdapter? get() = bluetoothManager?.adapter
+    val isBluetoothAvailable: Boolean get() = bluetoothAdapter != null
+    val isBluetoothEnabled: Boolean
+        get() = try {
+            bluetoothAdapter?.isEnabled == true
+        } catch (_: SecurityException) {
+            false
+        }
     private val scanner: BluetoothLeScanner?
         get() = try {
             bluetoothAdapter?.bluetoothLeScanner
