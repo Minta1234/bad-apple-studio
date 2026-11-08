@@ -174,6 +174,11 @@ class MainActivity : ComponentActivity() {
 
                          // 4. Connect to Board
                          AnimatedVisibility(visible = conversionPath != null) {
+                             LaunchedEffect(conversionPath) {
+                                 if (conversionPath != null && connectedDevice == null && !isScanning) {
+                                     checkBluetoothAndScan()
+                                 }
+                             }
                              ConnectCard(
                                  isScanning = isScanning,
                                  isBluetoothEnabled = isBluetoothOn,
@@ -183,7 +188,7 @@ class MainActivity : ComponentActivity() {
                                      checkBluetoothAndScan()
                                  },
                                  onCancelScan = {
-                                     isScanning = false
+                                     stopScan()
                                  },
                                  onSelectDevice = { device ->
                                      connectedDevice = device
@@ -327,19 +332,35 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private var scanJob: kotlinx.coroutines.Job? = null
+
     private fun startScan() {
+        scanJob?.cancel()
         isScanning = true
         scannedDevices.clear()
         
-        lifecycleScope.launch {
+        scanJob = lifecycleScope.launch {
             bleManager.scanDevices().collect { device ->
-                if (!scannedDevices.contains(device)) {
+                if (scannedDevices.none { it.address == device.address }) {
                     scannedDevices.add(device)
+                    // Auto-select discovered ESP32 board
+                    if (connectedDevice == null) {
+                        connectedDevice = device
+                    }
                 }
             }
-            // Flow completes when timeout is reached
-            isScanning = false
         }
+    }
+
+    private fun stopScan() {
+        scanJob?.cancel()
+        scanJob = null
+        isScanning = false
+    }
+
+    override fun onPause() {
+        super.onPause()
+        stopScan()
     }
 
     private fun startUpload(device: BluetoothDevice) {
@@ -365,7 +386,7 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        isScanning = false
+        stopScan()
         isUploading = true
         uploadProgress = 0f
         uploadSpeed = ""
@@ -755,12 +776,30 @@ fun ConnectCard(
         Spacer(modifier = Modifier.height(8.dp))
 
         if (isScanning) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    "Auto-scanning for BadApple_Studio...",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
             Button(
                 onClick = onCancelScan,
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFCE4EC), contentColor = Color(0xFFE91E63)),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("✕ Cancel Scan")
+                Text("✕ Stop Scanning")
             }
         } else {
             Button(

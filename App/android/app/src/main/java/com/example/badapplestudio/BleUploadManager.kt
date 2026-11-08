@@ -47,8 +47,16 @@ class BleUploadManager(private val context: Context) {
         val scanCallback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
                 val deviceName = result.device.name ?: result.scanRecord?.deviceName
-                if (deviceName == "BadApple_Studio") {
+                if (deviceName != null && (deviceName.startsWith("BadApple") || deviceName.contains("BadApple", ignoreCase = true))) {
                     trySend(result.device)
+                }
+            }
+            override fun onBatchScanResults(results: MutableList<ScanResult>?) {
+                results?.forEach { result ->
+                    val deviceName = result.device.name ?: result.scanRecord?.deviceName
+                    if (deviceName != null && (deviceName.startsWith("BadApple") || deviceName.contains("BadApple", ignoreCase = true))) {
+                        trySend(result.device)
+                    }
                 }
             }
             override fun onScanFailed(errorCode: Int) {
@@ -75,13 +83,7 @@ class BleUploadManager(private val context: Context) {
             return@callbackFlow
         }
 
-        val timeoutJob = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).launch {
-            kotlinx.coroutines.delay(10000)
-            close()
-        }
-
         awaitClose {
-            timeoutJob.cancel()
             try {
                 currentScanner.stopScan(scanCallback)
             } catch (_: SecurityException) {}
