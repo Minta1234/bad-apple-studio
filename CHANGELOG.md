@@ -1,6 +1,16 @@
 # Bad Apple Studio — Update Log
 
 
+
+## v4.1.1
+
+### 🖥️ Desktop App (Electron)
+- Updates and improvements.
+
+### 📱 Android APK
+- Updates and improvements.
+
+---
 ## v4.1.0
 
 ### 🚀 New Features
