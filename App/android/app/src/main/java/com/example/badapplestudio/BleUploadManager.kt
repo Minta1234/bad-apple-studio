@@ -172,7 +172,12 @@ class BleUploadManager(private val context: Context) {
                     // Upload complete
                     fis?.close()
                     onComplete(true, null)
-                    gatt.disconnect()
+                    // Allow ESP32 to finish writing, reloading, and rendering the new frame to the display
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        try {
+                            gatt.disconnect()
+                        } catch (_: Exception) {}
+                    }, 1200)
                 } else {
                     // A chunk was written, send the next
                     bytesUploaded += written.size

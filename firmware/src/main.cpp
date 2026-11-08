@@ -100,12 +100,17 @@ static VideoHeader header;
 static uint32_t   headerEndOffset = 0;
 static uint32_t   frameIntervalMs = 66;
 static uint32_t   lastFrameAt     = 0;
+static uint32_t   currentFrame    = 0;
+
+static bool readAndRenderColorFrame();
 
 // Which filesystem /video.dat currently lives on — set at boot and again after
 // every successful BLE upload, so playback and reloadVideo() always agree.
 static bool videoOnSD = false;
 
 void reloadVideo() {
+  currentFrame = 0;
+  lastFrameAt = 0;
   if (videoFile) videoFile.close();
 #ifdef HAS_SD_CARD
   videoFile = videoOnSD ? SD.open("/video.dat", "r") : SPIFFS.open("/video.dat", "r");
@@ -115,9 +120,21 @@ void reloadVideo() {
   if (videoFile && videoFile.read((uint8_t*)&header, sizeof(header)) == sizeof(header)) {
     headerEndOffset = sizeof(header);
     if (header.fps > 0) frameIntervalMs = 1000UL / header.fps;
+#if defined(DISPLAY_DRIVER_TFT) || defined(DISPLAY_DRIVER_ILI9341) || defined(DISPLAY_DRIVER_ST7789)
+    tft.fillScreen(TFT_BLACK);
+#elif defined(DISPLAY_DRIVER_ARDUINO_GFX)
+    gfx->fillScreen(BLACK);
+#elif defined(DISPLAY_DRIVER_SSD1306) || defined(DISPLAY_DRIVER_SH1106) || defined(DISPLAY_DRIVER_U8G2_CUSTOM)
+    u8g2.clearBuffer();
+    u8g2.sendBuffer();
+#endif
     Serial.printf("Reloaded Video: %ux%u, %u frames, %u fps (source=%s)\n",
                   header.width, header.height, header.frameCount, header.fps,
                   videoOnSD ? "SD" : "SPIFFS");
+    // Immediately render the first frame so new images or videos show up right away!
+    if (header.colorMode == 2) {
+      readAndRenderColorFrame();
+    }
   } else {
     Serial.println("Failed to reload video header.");
   }
@@ -575,8 +592,6 @@ void setup() {
   setupBLE();
 #endif
 }
-
-static uint32_t currentFrame = 0;
 
 // ── loop ──────────────────────────────────────────────────────────────────────
 void loop() {

@@ -343,10 +343,6 @@ class MainActivity : ComponentActivity() {
             bleManager.scanDevices().collect { device ->
                 if (scannedDevices.none { it.address == device.address }) {
                     scannedDevices.add(device)
-                    // Auto-select discovered ESP32 board
-                    if (connectedDevice == null) {
-                        connectedDevice = device
-                    }
                 }
             }
         }

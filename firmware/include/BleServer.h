@@ -68,6 +68,7 @@ class CharacteristicCallbacks: public BLECharacteristicCallbacks {
             }
 
         } else if (rxValue == "END") {
+            isReceivingVideo = false;
             bool complete = (receivedUploadBytes == expectedUploadBytes);
             endVideoReceive(!complete);
             if (complete) {
