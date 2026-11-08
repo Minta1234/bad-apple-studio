@@ -1,5 +1,11 @@
 node_modules/
 backend/jobs/
+.kotlin/
+*.salive
+App/android/.gradle/
+App/android/build/
+App/android/app/build/
+
 firmware/.pio/
 firmware/data/
 .DS_Store
@@ -9,3 +15,8 @@ dist/
 .testUI/
 lib.txt
 jobs/
+.kotlin/
+*.salive
+App/android/.gradle/
+App/android/build/
+App/android/app/build/

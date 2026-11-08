@@ -170,7 +170,18 @@ jobs:
       - name: Build Android Release APK
         run: |
           cd App/android
-          ./gradlew assembleRelease --no-daemon --stacktrace
+          for attempt in 1 2 3; do
+            echo "Attempt $attempt of 3..."
+            ./gradlew assembleRelease --no-daemon --stacktrace && break || {
+              if [ $attempt -lt 3 ]; then
+                echo "Build failed or network timeout, retrying in 10s..."
+                sleep 10
+              else
+                echo "Build failed after 3 attempts."
+                exit 1
+              fi
+            }
+          done
 
       - name: Prepare Android artifacts
         run: |
