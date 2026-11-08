@@ -20,3 +20,9 @@ jobs/
 App/android/.gradle/
 App/android/build/
 App/android/app/build/
+
+.kotlin/
+*.salive
+App/android/.gradle/
+App/android/build/
+App/android/app/build/
