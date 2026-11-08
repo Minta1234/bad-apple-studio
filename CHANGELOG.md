@@ -6,6 +6,14 @@
 
 
 
+
+## v4.4.0
+
+### 🚀 New Features
+- prompt user to enable Bluetooth when scanning or uploading (7badacc)
+
+---
+
 ## v4.3.1
 
 ### 🐛 Bug Fixes & Stability
