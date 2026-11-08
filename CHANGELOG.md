@@ -5,6 +5,14 @@
 
 
 
+
+## v4.3.1
+
+### 🐛 Bug Fixes & Stability
+- use npmmirror for Electron and electron-builder binaries to prevent 504 timeouts (4a36b79)
+
+---
+
 ## v4.3.0
 
 ### 🚀 New Features
