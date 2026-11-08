@@ -13,6 +13,7 @@
 
 extern File     videoFile;
 extern bool     isReceivingVideo;
+extern bool     isReceivingBle;
 extern uint32_t expectedUploadBytes;
 extern uint32_t receivedUploadBytes;
 extern void     reloadVideo();
@@ -35,8 +36,9 @@ class ServerCallbacks: public BLEServerCallbacks {
     }
     void onDisconnect(BLEServer* pServer) override {
         Serial.println("BLE Client Disconnected");
-        if (isReceivingVideo) {
+        if (isReceivingBle) {
             Serial.println("BLE: disconnected mid-transfer — discarding partial file");
+            isReceivingBle = false;
             endVideoReceive(true);
         }
         // Delay before restarting advertising to allow the ESP32 BLE stack to fully clean up
@@ -56,6 +58,7 @@ static bool flushBleBuffer(bool sendAck = false) {
         size_t written = videoFile.write(bleWriteBuf, toWrite);
         if (written != toWrite) {
             Serial.println("BLE: write failed mid-transfer — aborting");
+            isReceivingBle = false;
             endVideoReceive(true);
             notifyStatus("ERROR:WRITE_FAIL");
             return false;
@@ -89,17 +92,22 @@ class CharacteristicCallbacks: public BLECharacteristicCallbacks {
                 return;
             }
             if (beginVideoReceive(expectedBytes, forceSD)) {
+                isReceivingBle = true;
                 Serial.printf("BLE: Started receiving video (%u bytes, target=%s)\n",
                               expectedBytes, uploadTargetIsSD() ? "SD" : "SPIFFS");
                 notifyStatus(uploadTargetIsSD() ? "OK:SD" : "OK:SPIFFS");
             } else {
+                isReceivingBle = false;
                 Serial.println("BLE: Not enough free storage for this upload");
                 notifyStatus("ERROR:NO_SPACE");
             }
 
-        } else if (rxValue == "END" && (!isReceivingVideo || receivedUploadBytes >= expectedUploadBytes || rxValue.length() == 3)) {
-            if (!flushBleBuffer(false)) return;
-            isReceivingVideo = false;
+        } else if (rxValue == "END" && (!isReceivingBle || receivedUploadBytes >= expectedUploadBytes || rxValue.length() == 3)) {
+            if (!flushBleBuffer(false)) {
+                isReceivingBle = false;
+                return;
+            }
+            isReceivingBle = false;
             bool complete = (receivedUploadBytes == expectedUploadBytes && expectedUploadBytes > 0);
             endVideoReceive(!complete);
             if (complete) {
@@ -114,7 +122,7 @@ class CharacteristicCallbacks: public BLECharacteristicCallbacks {
             }
 
         } else {
-            if (isReceivingVideo && videoFile) {
+            if (isReceivingBle && videoFile) {
                 const uint8_t* data = (const uint8_t*)rxValue.data();
                 size_t len = rxValue.length();
                 receivedUploadBytes += len;

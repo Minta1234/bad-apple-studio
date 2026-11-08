@@ -95,6 +95,8 @@ struct VideoHeader {
 
 File       videoFile;
 bool       isReceivingVideo = false;
+bool       isReceivingBle   = false;
+bool       isReceivingSerial = false;
 
 static VideoHeader header;
 static uint32_t   headerEndOffset = 0;
@@ -319,7 +321,9 @@ bool uploadTargetIsSD() { return uploadTarget == UploadTarget::SD_TARGET; }
 // corrupt frames or boots to a black screen.
 void endVideoReceive(bool aborted) {
   if (videoFile) videoFile.close();
-  isReceivingVideo = false;
+  isReceivingVideo  = false;
+  isReceivingBle    = false;
+  isReceivingSerial = false;
   if (!aborted && uploadTarget != UploadTarget::NONE && receivedUploadBytes == expectedUploadBytes && expectedUploadBytes > 0) {
     videoOnSD = uploadTargetIsSD();
     reloadVideo();
@@ -338,8 +342,6 @@ void endVideoReceive(bool aborted) {
 }
 
 // ── USB serial upload ───────────────────────────────────────────────────────
-// Protocol: send `BAS:START:<byte-count>\n`, wait for BAS:OK:<target>, then
-// ── USB serial upload ───────────────────────────────────────────────────────
 // Protocol: send `load_serial` or `BAS:START:<byte-count>[:SD]\n`, wait for
 // BAS:OK:<target>, then write exactly byte-count raw video.dat bytes. The board
 // responds BAS:OK:DONE once the file has been safely closed and reloaded.
@@ -348,7 +350,7 @@ static size_t serialCommandLength = 0;
 static uint32_t lastSerialRxTime = 0;
 
 static void handleSerialUpload() {
-  if (isReceivingVideo) {
+  if (isReceivingSerial) {
     uint8_t buffer[512];
     const size_t avail = Serial.available();
     if (avail > 0) {
@@ -375,6 +377,9 @@ static void handleSerialUpload() {
     return;
   }
 
+  // When Bluetooth upload is actively streaming, don't parse Serial commands that could collide
+  if (isReceivingBle) return;
+
   while (Serial.available()) {
     const char c = (char)Serial.read();
     if (c == '\n' || c == '\r') {
@@ -383,7 +388,8 @@ static void handleSerialUpload() {
 
       if (strcmp(serialCommand, "load_serial") == 0 || strcmp(serialCommand, "BAS:LOAD_SERIAL") == 0) {
         if (videoFile) videoFile.close();
-        isReceivingVideo = false;
+        isReceivingVideo  = false;
+        isReceivingSerial = false;
         Serial.println("BAS:OK:READY");
       } else {
         const char* prefix = "BAS:START:";
@@ -401,6 +407,7 @@ static void handleSerialUpload() {
           if (!size) {
             Serial.println("BAS:ERROR:BAD_SIZE");
           } else if (beginVideoReceive(size, forceSD)) {
+            isReceivingSerial = true;
             lastSerialRxTime = millis();
             Serial.println(uploadTargetIsSD() ? "BAS:OK:SD" : "BAS:OK:SPIFFS");
           } else {

@@ -1075,6 +1075,13 @@
       return await char.writeValue(data);
     }
 
+    async function writeBleChunk(char, chunk) {
+      if (typeof char.writeValueWithoutResponse === 'function') {
+        return await char.writeValueWithoutResponse(chunk);
+      }
+      return await writeBle(char, chunk);
+    }
+
     function friendlyUploadError(code) {
       if (!code) return 'Unknown board error.';
       if (code.startsWith('ERROR:SIZE_MISMATCH')) {
@@ -1134,9 +1141,7 @@
           const crossesFlushBoundary = Math.floor(prevSent / 2048) !== Math.floor((prevSent + chunk.byteLength) / 2048);
 
           try {
-            const flushPromise = (crossesFlushBoundary && bleStatusChar) ? waitForFlushAck(90) : null;
-            // Use writeValueWithResponse so every chunk is GATT-acknowledged by the ESP32
-            await writeBle(bleChar, chunk);
+            await writeBleChunk(bleChar, chunk);
             sent += chunk.byteLength;
             retryCount = 0; // reset on success
 
@@ -1146,15 +1151,10 @@
             progressLabel.textContent = `Sending... ${(sent / 1024).toFixed(1)} KB / ${(totalBytes / 1024).toFixed(1)} KB`;
 
             if (crossesFlushBoundary) {
-              // The ESP32's 2KB RAM buffer is flushing to SPIFFS flash right now;
-              // wait for either its ACK notification or the safe 90ms flash write window.
-              if (flushPromise) {
-                await flushPromise;
-              } else {
-                await sleep(90);
-              }
+              // The ESP32's 2KB RAM buffer is flushing to SPIFFS flash right now
+              await sleep(50);
             } else {
-              await sleep(5);
+              await sleep(15);
             }
           } catch (writeErr) {
             retryCount++;
