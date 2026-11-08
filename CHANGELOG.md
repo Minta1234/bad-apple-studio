@@ -7,6 +7,14 @@
 
 
 
+
+## v4.5.0
+
+### 🚀 New Features
+- continuous real-time Bluetooth auto-scan and auto-select (4185dec)
+
+---
+
 ## v4.4.0
 
 ### 🚀 New Features
