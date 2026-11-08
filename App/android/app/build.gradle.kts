@@ -11,8 +11,8 @@ android {
         applicationId = "com.rzeldent.badapplestudio"
         minSdk = 24
         targetSdk = 36
-        versionCode = 4
-        versionName = "4.1.1"
+        versionCode = 5
+        versionName = "4.1.2"
     }
 
     buildTypes {
