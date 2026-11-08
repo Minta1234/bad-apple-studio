@@ -92,6 +92,19 @@ lines.forEach(line => {
   }
 });
 
+let totalItems = 0;
+for (const key of Object.keys(categories)) {
+  totalItems += categories[key].items.length;
+}
+
+if (totalItems === 0) {
+  console.log('No actionable feature/fix commits found to release.');
+  if (process.env.GITHUB_OUTPUT) {
+    fs.appendFileSync(process.env.GITHUB_OUTPUT, `has_release=false\n`);
+  }
+  process.exit(0);
+}
+
 if (hasBreaking) bumpType = 'major';
 else if (hasFeat) bumpType = 'minor';
 else if (hasFix) bumpType = 'patch';
@@ -181,6 +194,7 @@ if (fs.existsSync(gradlePath)) {
 
 // Export for GitHub Actions
 if (process.env.GITHUB_OUTPUT) {
+  fs.appendFileSync(process.env.GITHUB_OUTPUT, `has_release=true\n`);
   fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${newVersion}\n`);
   fs.appendFileSync(process.env.GITHUB_OUTPUT, `tag=ReleaseV${newVersion}\n`);
   fs.appendFileSync(process.env.GITHUB_OUTPUT, `bump_type=${bumpType}\n`);

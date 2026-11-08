@@ -1,0 +1,366 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: 'Version bump mode (auto analyzes commits to write changelog)'
+        required: false
+        type: choice
+        default: 'auto'
+        options:
+          - 'auto'
+          - 'patch'
+          - 'minor'
+          - 'major'
+          - 'none'
+      custom_version:
+        description: 'Or specify custom version (e.g. 4.2.0)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  # =========================================================================
+  # 1. CI VALIDATION STAGE
+  # =========================================================================
+  validate-js:
+    name: Verify JavaScript & Electron Code
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax check Electron and backend code
+        run: |
+          node -c main.js preload.js preload-picker.js
+          node -c backend/server.js
+          find backend/src -name "*.js" -exec node -c {} +
+          echo "JavaScript code syntax is valid!"
+
+  validate-firmware:
+    name: Verify ESP32 Firmware Compilation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO
+        run: pip install -U platformio
+
+      - name: Compile ESP32 firmware targets
+        run: |
+          pio run -e ESP32-2432S028 -e ESP32-2432S032 -d firmware
+          echo "Firmware targets compiled successfully!"
+
+  validate-android:
+    name: Verify Android App Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Make gradlew executable
+        run: chmod +x App/android/gradlew
+
+      - name: Compile Android Project
+        run: |
+          cd App/android
+          for attempt in 1 2 3; do
+            echo "Attempt $attempt of 3..."
+            ./gradlew assembleDebug --no-daemon --stacktrace && break || {
+              if [ $attempt -lt 3 ]; then
+                echo "Build failed or network timeout, retrying in 10s..."
+                sleep 10
+              else
+                echo "Build failed after 3 attempts."
+                exit 1
+              fi
+            }
+          done
+          echo "Android application compiled successfully!"
+
+  # =========================================================================
+  # 2. CD PREPARE, AUTO-BUMP & CHANGELOG STAGE
+  # =========================================================================
+  prepare-release:
+    name: Prepare & Version Bump
+    needs: [validate-js, validate-firmware, validate-android]
+    if: github.event_name == 'workflow_dispatch' || (github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip ci]'))
+    runs-on: ubuntu-latest
+    outputs:
+      has_release: ${{ steps.version_step.outputs.has_release }}
+      version: ${{ steps.version_step.outputs.version }}
+      tag: ${{ steps.version_step.outputs.tag }}
+      ref: ${{ steps.version_step.outputs.ref }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Analyze commits & Bump version
+        id: version_step
+        run: |
+          BUMP="${{ github.event.inputs.bump_type }}"
+          CUSTOM="${{ github.event.inputs.custom_version }}"
+
+          if [ -n "$CUSTOM" ]; then
+            echo "Applying custom version: $CUSTOM"
+            node scripts/bump-version.js "$CUSTOM"
+          elif [ "$BUMP" = "patch" ] || [ "$BUMP" = "minor" ] || [ "$BUMP" = "major" ]; then
+            echo "Applying manual $BUMP version bump..."
+            node scripts/bump-version.js "$BUMP"
+          elif [ "$BUMP" = "none" ]; then
+            echo "No bump requested."
+            VERSION=$(node -p "require('./package.json').version")
+            echo "has_release=true" >> $GITHUB_OUTPUT
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "tag=ReleaseV${VERSION}" >> $GITHUB_OUTPUT
+            echo "ref=${{ github.ref }}" >> $GITHUB_OUTPUT
+            exit 0
+          else
+            echo "Auto-detecting version bump and generating changelog..."
+            node scripts/auto-changelog.js
+          fi
+
+          if [ -f "$GITHUB_OUTPUT" ]; then
+            cat "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit version bump & push tag
+        if: steps.version_step.outputs.has_release == 'true' && steps.version_step.outputs.tag != ''
+        run: |
+          VERSION="${{ steps.version_step.outputs.version }}"
+          TAG="${{ steps.version_step.outputs.tag }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json App/android/app/build.gradle.kts CHANGELOG.md || true
+          
+          # Only commit if files changed
+          if ! git diff-index --quiet HEAD --; then
+            git commit -m "chore(release): bump version to ${VERSION} [skip ci]"
+            git push origin HEAD:main
+          fi
+
+          git tag -a "$TAG" -m "Release v${VERSION}" || true
+          git push origin "$TAG" --force
+          echo "ref=$TAG" >> $GITHUB_OUTPUT
+
+  # =========================================================================
+  # 3. CD BUILD ARTIFACTS STAGE (Windows & Android in parallel)
+  # =========================================================================
+  build-windows:
+    name: Build Windows App (.exe & .zip)
+    needs: [prepare-release]
+    if: needs.prepare-release.outputs.has_release == 'true'
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-release.outputs.ref || needs.prepare-release.outputs.tag }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Electron App
+        run: npx electron-builder --win --publish never
+
+      - name: Prepare Windows artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path windows-dist
+          Get-ChildItem -Path dist -Include *.exe, *.zip, *.blockmap, latest.yml -Recurse | ForEach-Object {
+            Copy-Item -Path $_.FullName -Destination windows-dist/ -Force
+          }
+          Get-ChildItem -Path windows-dist
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts
+          path: windows-dist/*
+          if-no-files-found: error
+
+  build-android:
+    name: Build Android App (.apk)
+    needs: [prepare-release]
+    if: needs.prepare-release.outputs.has_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-release.outputs.ref || needs.prepare-release.outputs.tag }}
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Make gradlew executable
+        run: chmod +x App/android/gradlew
+
+      - name: Build Android Release APK
+        run: |
+          cd App/android
+          for attempt in 1 2 3; do
+            echo "Attempt $attempt of 3..."
+            ./gradlew assembleRelease --no-daemon --stacktrace && break || {
+              if [ $attempt -lt 3 ]; then
+                echo "Build failed or network timeout, retrying in 10s..."
+                sleep 10
+              else
+                echo "Build failed after 3 attempts."
+                exit 1
+              fi
+            }
+          done
+
+      - name: Prepare Android artifacts
+        run: |
+          mkdir -p android-dist
+          VERSION="${{ needs.prepare-release.outputs.version }}"
+          APK_FILE=$(find App/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          if [ -z "$APK_FILE" ]; then
+            echo "Error: No release APK found!"
+            exit 1
+          fi
+          echo "Found release APK at: $APK_FILE"
+          cp "$APK_FILE" "android-dist/BadAppleStudio-v${VERSION}.apk"
+          cp "$APK_FILE" "android-dist/BadAppleStudio.apk"
+          ls -la android-dist
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-artifacts
+          path: android-dist/*
+          if-no-files-found: error
+
+  # =========================================================================
+  # 4. CD PUBLISH RELEASE STAGE
+  # =========================================================================
+  publish-release:
+    name: Publish GitHub Release
+    needs: [prepare-release, build-windows, build-android]
+    if: needs.prepare-release.outputs.has_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-release.outputs.ref || needs.prepare-release.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-artifacts
+          path: release-assets
+
+      - name: Download Android artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: android-artifacts
+          path: release-assets
+
+      - name: Extract Release Notes from CHANGELOG.md
+        id: notes
+        run: |
+          export VERSION="${{ needs.prepare-release.outputs.version }}"
+          CHANGELOG_BODY=$(node -e "
+            const fs = require('fs');
+            if (!fs.existsSync('CHANGELOG.md')) {
+              console.log('Release v' + process.env.VERSION);
+              process.exit(0);
+            }
+            const content = fs.readFileSync('CHANGELOG.md', 'utf8');
+            const version = process.env.VERSION;
+            const regex = new RegExp('(?:^|\\\n)##\\\s*v?' + version.replace(/\\\./g, '\\\\.') + '[^\\\n]*\\\n([\\\s\\\S]*?)(?=(?:\\\n##\\\s|\\\n---|$))', 'i');
+            const match = content.match(regex);
+            const header = '# Bad Apple Studio — Update Log\n\n';
+            if (match) {
+              const headingMatch = content.match(new RegExp('(?:^|\\\n)(##\\\s*v?' + version.replace(/\\\./g, '\\\\.') + '[^\\\n]*)', 'i'));
+              const heading = headingMatch ? headingMatch[1].trim() : ('## v' + version);
+              console.log(header + heading + '\n\n' + match[1].trim());
+            } else {
+              console.log(header + '## v' + version + '\n\n- Routine updates and improvements.');
+            }
+          ")
+
+          echo "$CHANGELOG_BODY" > release_notes.md
+          echo "Generated Release Notes:"
+          cat release_notes.md
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ needs.prepare-release.outputs.tag }}"
+          VERSION="${{ needs.prepare-release.outputs.version }}"
+
+          # Collect assets
+          ASSETS=()
+          for f in release-assets/*.exe release-assets/*.zip release-assets/*.apk release-assets/*.blockmap; do
+            if [ -f "$f" ]; then
+              ASSETS+=("$f")
+            fi
+          done
+
+          echo "Publishing release for tag: $TAG"
+          # Delete existing draft/release if recreating tag
+          gh release delete "$TAG" --yes || true
+
+          gh release create "$TAG" "${ASSETS[@]}" \
+            --title "Release v${VERSION}" \
+            --notes-file release_notes.md
+
+          echo "Release v${VERSION} published successfully!"

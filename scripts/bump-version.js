@@ -106,6 +106,7 @@ console.log(`Git Tag: ReleaseV${newVersion}`);
 
 // Write outputs to GitHub Actions output environment if available
 if (process.env.GITHUB_OUTPUT) {
+  fs.appendFileSync(process.env.GITHUB_OUTPUT, `has_release=true\n`);
   fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${newVersion}\n`);
   fs.appendFileSync(process.env.GITHUB_OUTPUT, `tag=ReleaseV${newVersion}\n`);
 }
