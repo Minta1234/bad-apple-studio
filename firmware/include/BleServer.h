@@ -146,6 +146,7 @@ void setupBLE() {
     pService->start();
 
     BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
+    pAdvertising->addServiceUUID(SERVICE_UUID);
     pAdvertising->setScanResponse(true);
     // Helps with iPhone/iOS connections
     pAdvertising->setMinPreferred(0x06);

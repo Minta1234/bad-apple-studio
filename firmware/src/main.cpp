@@ -543,6 +543,11 @@ void setup() {
   u8g2.setBusClock(400000);
 #endif
 
+  // Start BLE Server immediately so board is ALWAYS discoverable
+#ifdef HAS_BLE
+  setupBLE();
+#endif
+
   bool videoOpened = false;
 
 #ifdef HAS_SD_CARD
@@ -551,9 +556,14 @@ void setup() {
   if (ensureSDMounted()) {
     videoFile = SD.open("/video.dat", "r");
     if (videoFile) {
-      Serial.println("Found /video.dat on SD Card!");
-      videoOpened = true;
-      videoOnSD   = true;
+      if (videoFile.read((uint8_t*)&header, sizeof(header)) == sizeof(header)) {
+        Serial.println("Found valid /video.dat on SD Card!");
+        videoOpened = true;
+        videoOnSD   = true;
+      } else {
+        Serial.println("Invalid header in /video.dat on SD Card.");
+        videoFile.close();
+      }
     } else {
       Serial.println("No /video.dat on SD Card. Falling back to SPIFFS...");
     }
@@ -564,33 +574,71 @@ void setup() {
 
   if (!videoOpened) {
     if (!SPIFFS.begin(true)) {
-      Serial.println("SPIFFS mount failed"); return;
+      Serial.println("SPIFFS mount failed");
+    } else {
+      videoFile = SPIFFS.open("/video.dat", "r");
+      if (videoFile) {
+        if (videoFile.read((uint8_t*)&header, sizeof(header)) == sizeof(header)) {
+          Serial.println("Opened valid /video.dat from SPIFFS");
+          videoOpened = true;
+          videoOnSD   = false;
+        } else {
+          Serial.println("Invalid header in /video.dat on SPIFFS.");
+          videoFile.close();
+        }
+      } else {
+        Serial.println("No /video.dat found on SPIFFS.");
+      }
     }
-
-    videoFile = SPIFFS.open("/video.dat", "r");
-    if (!videoFile) {
-      Serial.println("Cannot open /video.dat"); return;
-    }
-    Serial.println("Opened /video.dat from SPIFFS");
   }
 
-  if (videoFile.read((uint8_t*)&header, sizeof(header)) != sizeof(header)) {
-    Serial.println("Header read failed"); return;
-  }
-  headerEndOffset = sizeof(header);
-
-  if (header.fps > 0) frameIntervalMs = 1000UL / header.fps;
-
-  Serial.printf("Video %ux%u, %u frames, %u fps\n",
-                header.width, header.height, header.frameCount, header.fps);
-  Serial.println("BAS:READY");
-
-  lastFrameAt = millis();
-  
-  // Start BLE Server (CYD / ESP32-2432S028 only)
-#ifdef HAS_BLE
-  setupBLE();
+  if (videoOpened) {
+    headerEndOffset = sizeof(header);
+    if (header.fps > 0) frameIntervalMs = 1000UL / header.fps;
+    Serial.printf("Video %ux%u, %u frames, %u fps (source=%s)\n",
+                  header.width, header.height, header.frameCount, header.fps,
+                  videoOnSD ? "SD" : "SPIFFS");
+    // Render first frame immediately
+    if (header.colorMode == 2) {
+      readAndRenderColorFrame();
+    }
+  } else {
+    // Show standby screen so user knows board is alive and ready for Bluetooth upload
+#if defined(DISPLAY_DRIVER_TFT) || defined(DISPLAY_DRIVER_ILI9341) || defined(DISPLAY_DRIVER_ST7789)
+    tft.fillScreen(TFT_BLACK);
+    tft.setTextColor(TFT_CYAN, TFT_BLACK);
+    tft.setTextSize(2);
+    tft.setCursor(20, 35);
+    tft.println("Bad Apple Studio");
+    tft.setTextSize(1);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.setCursor(20, 75);
+    tft.println("Ready for upload via Bluetooth");
+    tft.setTextColor(TFT_GREEN, TFT_BLACK);
+    tft.setCursor(20, 105);
+    tft.println("Device: BadApple_Studio");
+    tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    tft.setCursor(20, 135);
+    tft.println("Open app and tap Scan / Connect");
+#elif defined(DISPLAY_DRIVER_ARDUINO_GFX)
+    gfx->fillScreen(BLACK);
+    gfx->setTextColor(CYAN);
+    gfx->setTextSize(2);
+    gfx->setCursor(20, 35);
+    gfx->println("Bad Apple Studio");
+    gfx->setTextSize(1);
+    gfx->setTextColor(WHITE);
+    gfx->setCursor(20, 75);
+    gfx->println("Ready for upload via Bluetooth");
+    gfx->setTextColor(GREEN);
+    gfx->setCursor(20, 105);
+    gfx->println("Device: BadApple_Studio");
 #endif
+    Serial.println("Waiting for video upload via BLE or USB...");
+  }
+
+  Serial.println("BAS:READY");
+  lastFrameAt = millis();
 }
 
 // ── loop ──────────────────────────────────────────────────────────────────────
@@ -603,6 +651,8 @@ void loop() {
   }
 #endif
   if (isReceivingVideo) return; // Pause playback during USB serial transfer
+  if (!videoFile) return;       // No valid video to play, wait for upload
+
   uint32_t now = millis();
   if (now - lastFrameAt < frameIntervalMs) return;
   lastFrameAt += frameIntervalMs;
