@@ -12,6 +12,14 @@
 
 
 
+
+## v4.6.1
+
+### 🐛 Bug Fixes & Stability
+- prevent serial upload timeout from aborting active bluetooth transfer (a8cba87)
+
+---
+
 ## v4.6.0
 
 ### 🚀 New Features
