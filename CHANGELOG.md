@@ -3,6 +3,17 @@
 
 
 
+
+## v4.2.0
+
+### 🚀 New Features
+- unify full end-to-end CI/CD pipeline with automatic testing, version bump, changelog, and release (36382e9)
+
+### 🔧 Maintenance & Enhancements
+- add android and kotlin build artifacts to gitignore (1103baf)
+
+---
+
 ## v4.1.2
 
 ### 🖥️ Desktop App (Electron)
