@@ -1,5 +1,16 @@
 # Bad Apple Studio — Update Log
 
+
+## v4.1.0
+
+### 🚀 New Features
+- add CI code verification workflow and auto-changelog generator (1051433)
+
+### 🐛 Bug Fixes & Stability
+- remove pip cache option from python setup (5e8a32c)
+
+---
+
 ## v4.0.1 — Direct Numeric Controls & Android Service Fixes
 
 ### 🖥️ Desktop App (Electron) & Web Interface
