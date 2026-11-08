@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.rzeldent.badapplestudio"
+    namespace = "com.example.badapplestudio"
     compileSdk = 36
     defaultConfig {
         applicationId = "com.rzeldent.badapplestudio"

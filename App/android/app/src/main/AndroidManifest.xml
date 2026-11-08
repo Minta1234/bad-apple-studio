@@ -27,7 +27,7 @@
             android:exported="false"
             tools:node="merge" />
         <activity
-            android:name=".MainActivity"
+            android:name="com.example.badapplestudio.MainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

@@ -16,9 +16,14 @@ import java.util.UUID
 
 @SuppressLint("MissingPermission")
 class BleUploadManager(private val context: Context) {
-    private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-    private val bluetoothAdapter: BluetoothAdapter? = bluetoothManager.adapter
-    private val scanner: BluetoothLeScanner? = bluetoothAdapter?.bluetoothLeScanner
+    private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+    private val bluetoothAdapter: BluetoothAdapter? get() = bluetoothManager?.adapter
+    private val scanner: BluetoothLeScanner?
+        get() = try {
+            bluetoothAdapter?.bluetoothLeScanner
+        } catch (_: SecurityException) {
+            null
+        }
     private var bluetoothGatt: BluetoothGatt? = null
 
     // UUIDs must match the ESP32 BleServer.h
@@ -26,7 +31,8 @@ class BleUploadManager(private val context: Context) {
     private val CHAR_UUID = UUID.fromString("12345678-1234-5678-1234-56789abcdef1")
 
     fun scanDevices(): Flow<BluetoothDevice> = callbackFlow {
-        if (scanner == null) {
+        val currentScanner = scanner
+        if (currentScanner == null) {
             close()
             return@callbackFlow
         }
@@ -54,7 +60,13 @@ class BleUploadManager(private val context: Context) {
         // device name is in the Scan Response packet rather than the main advert packet.
         val filters = emptyList<ScanFilter>()
 
-        scanner.startScan(filters, settings, scanCallback)
+        try {
+            currentScanner.startScan(filters, settings, scanCallback)
+        } catch (e: SecurityException) {
+            android.util.Log.e("BleScan", "Scan failed: missing permission", e)
+            close()
+            return@callbackFlow
+        }
 
         val timeoutJob = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).launch {
             kotlinx.coroutines.delay(10000)
@@ -63,7 +75,9 @@ class BleUploadManager(private val context: Context) {
 
         awaitClose {
             timeoutJob.cancel()
-            scanner.stopScan(scanCallback)
+            try {
+                currentScanner.stopScan(scanCallback)
+            } catch (_: SecurityException) {}
         }
     }
 
