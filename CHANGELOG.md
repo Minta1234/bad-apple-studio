@@ -10,6 +10,14 @@
 
 
 
+
+## v4.5.3
+
+### 🐛 Bug Fixes & Stability
+- initialize BLE immediately on boot and add standby status screen (2f3b937)
+
+---
+
 ## v4.5.2
 
 ### 🐛 Bug Fixes & Stability
