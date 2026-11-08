@@ -4,6 +4,7 @@ const express = require('express');
 const path = require('path');
 const { execSync } = require('child_process');
 const https = require('https');
+const cors = require('cors');
 
 const jobsRouter    = require('./src/routes/convert');
 const firmwareRouter = require('./src/routes/firmware');
@@ -11,6 +12,7 @@ const { queuePrecompile, queueAllEnvironments, getCompileStatus } = require('./s
 
 const app = express();
 
+app.use(cors());
 app.use(express.static(path.join(__dirname, '..', 'web')));
 app.use('/api/jobs',     jobsRouter);
 app.use('/api/firmware', firmwareRouter);

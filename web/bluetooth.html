@@ -306,6 +306,36 @@
     #videoSeek { width:100%; accent-color:var(--tie); }
     #videoTime { display:flex; justify-content:space-between; color:var(--text-sub); font-size:0.72rem; }
 
+    .transform-num-input {
+      width: 58px;
+      padding: 3px 4px;
+      font-size: 0.82rem;
+      font-family: inherit;
+      color: var(--text-main);
+      background: rgba(255, 255, 255, 0.75);
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      text-align: center;
+      transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+    }
+
+    .transform-num-input:focus {
+      outline: none;
+      background: #ffffff;
+      border-color: var(--tie);
+      box-shadow: 0 0 0 2px rgba(45, 187, 235, 0.25);
+    }
+
+    .transform-num-input::-webkit-inner-spin-button,
+    .transform-num-input::-webkit-outer-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+
+    .transform-num-input {
+      -moz-appearance: textfield;
+    }
+
   </style>
 </head>
 
@@ -363,23 +393,35 @@
         <label class="form-label text-sub fw-medium mb-2">Screen Rotation &amp; Zoom</label>
         <div class="row g-2 align-items-center mb-2">
           <label class="col-4 col-form-label col-form-label-sm text-sub" for="bleRotation">Rotation</label>
-          <div class="col-6"><input class="form-range" type="range" id="bleRotation" min="0" max="360" value="0"></div>
-          <output class="col-2 text-sub" id="bleRotationValue">0°</output>
+          <div class="col-5"><input class="form-range" type="range" id="bleRotation" min="0" max="360" value="0"></div>
+          <div class="col-3 d-flex align-items-center justify-content-end gap-1">
+            <input class="transform-num-input" type="number" id="bleRotationNum" min="0" max="360" value="0" step="1" title="Type rotation angle (0-360)">
+            <span class="text-sub" style="font-size:0.82rem;min-width:12px;">°</span>
+          </div>
         </div>
         <div class="row g-2 align-items-center mb-2">
           <label class="col-4 col-form-label col-form-label-sm text-sub" for="bleZoom">Zoom</label>
-          <div class="col-6"><input class="form-range" type="range" id="bleZoom" min="0.5" max="5" step="0.1" value="1"></div>
-          <output class="col-2 text-sub" id="bleZoomValue">1.0×</output>
+          <div class="col-5"><input class="form-range" type="range" id="bleZoom" min="0.5" max="5" step="0.1" value="1"></div>
+          <div class="col-3 d-flex align-items-center justify-content-end gap-1">
+            <input class="transform-num-input" type="number" id="bleZoomNum" min="0.5" max="5" step="0.1" value="1.0" title="Type zoom multiplier (0.5-5.0)">
+            <span class="text-sub" style="font-size:0.82rem;min-width:12px;">×</span>
+          </div>
         </div>
         <div class="row g-2 align-items-center mb-2">
           <label class="col-4 col-form-label col-form-label-sm text-sub" for="blePanX">Pan X</label>
-          <div class="col-6"><input class="form-range" type="range" id="blePanX" min="-300" max="300" value="0"></div>
-          <output class="col-2 text-sub" id="blePanXValue">0</output>
+          <div class="col-5"><input class="form-range" type="range" id="blePanX" min="-300" max="300" value="0"></div>
+          <div class="col-3 d-flex align-items-center justify-content-end gap-1">
+            <input class="transform-num-input" type="number" id="blePanXNum" min="-300" max="300" step="1" value="0" title="Type horizontal pan offset (-300 to 300)">
+            <span class="text-sub" style="font-size:0.82rem;min-width:12px;visibility:hidden;">°</span>
+          </div>
         </div>
         <div class="row g-2 align-items-center">
           <label class="col-4 col-form-label col-form-label-sm text-sub" for="blePanY">Pan Y</label>
-          <div class="col-6"><input class="form-range" type="range" id="blePanY" min="-300" max="300" value="0"></div>
-          <output class="col-2 text-sub" id="blePanYValue">0</output>
+          <div class="col-5"><input class="form-range" type="range" id="blePanY" min="-300" max="300" value="0"></div>
+          <div class="col-3 d-flex align-items-center justify-content-end gap-1">
+            <input class="transform-num-input" type="number" id="blePanYNum" min="-300" max="300" step="1" value="0" title="Type vertical pan offset (-300 to 300)">
+            <span class="text-sub" style="font-size:0.82rem;min-width:12px;visibility:hidden;">°</span>
+          </div>
         </div>
         </div>
       </div>
@@ -571,15 +613,50 @@
       imagePreview.style.transform = transform;
       videoPreview.style.transform = transform;
     }
-    function bindTransformControl(input, output, format) {
-      const update = () => { output.textContent = format(input.value); updatePreviewTransform(); };
-      input.addEventListener('input', update);
-      update();
+    function bindTransformControl(slider, numInput, { min, max, parse = parseFloat, format = v => v } = {}) {
+      if (!slider || !numInput) return;
+      const syncFromSlider = () => {
+        numInput.value = format(slider.value);
+        updatePreviewTransform();
+      };
+      const syncFromNumber = () => {
+        let val = parse(numInput.value);
+        if (!isNaN(val)) {
+          if (min !== undefined && val < min) val = min;
+          if (max !== undefined && val > max) val = max;
+          slider.value = val;
+          updatePreviewTransform();
+        }
+      };
+      slider.addEventListener('input', syncFromSlider);
+      numInput.addEventListener('input', syncFromNumber);
+      numInput.addEventListener('focus', () => numInput.select());
+      numInput.addEventListener('change', () => {
+        let val = parse(numInput.value);
+        if (isNaN(val)) {
+          numInput.value = format(slider.value);
+        } else {
+          if (min !== undefined && val < min) val = min;
+          if (max !== undefined && val > max) val = max;
+          numInput.value = format(val);
+          slider.value = val;
+        }
+        updatePreviewTransform();
+      });
+      syncFromSlider();
     }
-    bindTransformControl(rotationInput, document.getElementById('bleRotationValue'), value => `${value}°`);
-    bindTransformControl(zoomInput, document.getElementById('bleZoomValue'), value => `${Number(value).toFixed(1)}×`);
-    bindTransformControl(panXInput, document.getElementById('blePanXValue'), value => value);
-    bindTransformControl(panYInput, document.getElementById('blePanYValue'), value => value);
+    bindTransformControl(rotationInput, document.getElementById('bleRotationNum'), {
+      min: 0, max: 360, parse: v => parseInt(v, 10), format: v => String(parseInt(v, 10) || 0)
+    });
+    bindTransformControl(zoomInput, document.getElementById('bleZoomNum'), {
+      min: 0.5, max: 5, parse: parseFloat, format: v => Number(v).toFixed(1)
+    });
+    bindTransformControl(panXInput, document.getElementById('blePanXNum'), {
+      min: -300, max: 300, parse: v => parseInt(v, 10), format: v => String(parseInt(v, 10) || 0)
+    });
+    bindTransformControl(panYInput, document.getElementById('blePanYNum'), {
+      min: -300, max: 300, parse: v => parseInt(v, 10), format: v => String(parseInt(v, 10) || 0)
+    });
 
     // ── Web Bluetooth support check ───────────────────────────────────────────────
     if (!navigator.bluetooth) {
@@ -590,7 +667,7 @@
     // ── Board list + media conversion ────────────────────────────────────────────
     async function loadBleBoards() {
       try {
-        const response = await fetch('/api/firmware/envs');
+        const response = await fetch('/api/firmware/envs', { headers: { 'ngrok-skip-browser-warning': 'true' } });
         const envs = await response.json();
         allBoards = envs;
         renderBoardOptions();
@@ -685,12 +762,12 @@
         // Default to SPIFFS: the backend automatically reduces FPS/resolution
         // to keep BLE uploads practical. SD mode is intentionally opt-in.
         formData.append('forSdCard', useSdCard.checked ? 'true' : 'false');
-        const response = await fetch('/api/jobs/convert', { method: 'POST', body: formData });
+        const response = await fetch('/api/jobs/convert', { method: 'POST', body: formData, headers: { 'ngrok-skip-browser-warning': 'true' } });
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || 'Conversion could not start.');
         const job = await waitForConversion(body.jobId);
         log('⬇ Downloading converted video.dat…');
-        const result = await fetch(`/api/jobs/${body.jobId}/files/video.dat`);
+        const result = await fetch(`/api/jobs/${body.jobId}/files/video.dat`, { headers: { 'ngrok-skip-browser-warning': 'true' } });
         if (!result.ok) throw new Error('Converted video.dat could not be read.');
         // Keep a Blob, not a Uint8Array: uploadFile reads one BLE chunk at a time.
         fileData = await result.blob();
@@ -711,7 +788,7 @@
 
     async function waitForConversion(jobId) {
       while (true) {
-        const response = await fetch(`/api/jobs/${jobId}`);
+        const response = await fetch(`/api/jobs/${jobId}`, { headers: { 'ngrok-skip-browser-warning': 'true' } });
         const job = await response.json();
         if (job.status === 'error') throw new Error(job.error || 'Conversion failed.');
         log(`⚙ ${job.progress || job.status}`);

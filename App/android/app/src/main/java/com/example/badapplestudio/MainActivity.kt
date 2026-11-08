@@ -55,7 +55,6 @@ import java.io.File
 class MainActivity : ComponentActivity() {
 
     private lateinit var bleManager: BleUploadManager
-    private lateinit var serialManager: SerialUploadManager
     private var selectedBoard by mutableStateOf(SupportedBoards.boards[0])
     private var selectedUri by mutableStateOf<Uri?>(null)
     private var isVideo by mutableStateOf(false)
@@ -74,14 +73,11 @@ class MainActivity : ComponentActivity() {
     private var uploadProgress by mutableStateOf(0f)
     private var uploadSpeed by mutableStateOf("")
     private var connectedDevice by mutableStateOf<BluetoothDevice?>(null)
-    private var serialConnected by mutableStateOf(false)
-    private var uploadMode by mutableStateOf("bluetooth")
 
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         bleManager = BleUploadManager(this)
-        serialManager = SerialUploadManager(this)
 
         setContent {
             BadAppleStudioTheme {
@@ -127,6 +123,7 @@ class MainActivity : ComponentActivity() {
                             panX = panX,
                             panY = panY,
                             onMediaPicked = { uri, isVid ->
+                                cancelConversion(showToast = false)
                                 selectedUri = uri
                                 isVideo = isVid
                                 conversionPath = null
@@ -165,45 +162,39 @@ class MainActivity : ComponentActivity() {
                             )
                         }
 
-                        // 4. Connect to Board
-                        AnimatedVisibility(visible = conversionPath != null) {
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(onClick = { uploadMode = "bluetooth" }, modifier = Modifier.weight(1f)) { Text("📡 Bluetooth") }
-                                OutlinedButton(onClick = { uploadMode = "serial" }, modifier = Modifier.weight(1f)) { Text("🔌 Serial USB") }
-                            }
-                            if (uploadMode == "bluetooth") ConnectCard(
-                                isScanning = isScanning,
-                                scannedDevices = scannedDevices,
-                                connectedDevice = connectedDevice,
-                                onScan = {
-                                    if (hasBlePermissions()) startScan()
-                                    else requestPermissionsLauncher.launch(getBlePermissions())
-                                },
-                                onCancelScan = {
-                                    isScanning = false
-                                    // Let the timeout/cancellation handle stopping the scan
-                                },
-                                onSelectDevice = { device ->
-                                    connectedDevice = device
-                                }
-                            ) else SerialConnectCard(serialConnected, onConnect = { connectSerial() }, onDisconnect = { serialManager.disconnect(); serialConnected = false })
-                            }
-                        }
+                         // 4. Connect to Board
+                         AnimatedVisibility(visible = conversionPath != null) {
+                             ConnectCard(
+                                 isScanning = isScanning,
+                                 scannedDevices = scannedDevices,
+                                 connectedDevice = connectedDevice,
+                                 onScan = {
+                                     if (hasBlePermissions()) startScan()
+                                     else requestPermissionsLauncher.launch(getBlePermissions())
+                                 },
+                                 onCancelScan = {
+                                     isScanning = false
+                                 },
+                                 onSelectDevice = { device ->
+                                     connectedDevice = device
+                                 }
+                             )
+                         }
 
-                        // 5. Upload
-                        AnimatedVisibility(visible = conversionPath != null) {
-                            UploadCard(
-                                isUploading = isUploading,
-                                uploadProgress = uploadProgress,
-                                uploadSpeed = uploadSpeed,
-                                canUpload = if (uploadMode == "serial") serialConnected else connectedDevice != null,
-                                uploadLabel = if (uploadMode == "serial") "📤 Upload via USB Serial" else "📤 Upload via Bluetooth",
-                                onUpload = { 
-                                    if (uploadMode == "serial") startSerialUpload() else connectedDevice?.let { startUpload(it) }
-                                }
-                            )
-                        }
+                         // 5. Upload
+                         AnimatedVisibility(visible = conversionPath != null) {
+                             UploadCard(
+                                 isUploading = isUploading,
+                                 uploadProgress = uploadProgress,
+                                 uploadSpeed = uploadSpeed,
+                                 canUpload = connectedDevice != null,
+                                 uploadLabel = "📤 Upload via Bluetooth",
+                                 onUpload = {
+                                     connectedDevice?.let { startUpload(it) }
+                                 }
+                             )
+                         }
+
 
                         // Bottom spacer so content doesn't hide behind nav bar
                         Spacer(modifier = Modifier.height(32.dp))
@@ -251,6 +242,7 @@ class MainActivity : ComponentActivity() {
         WorkManager.getInstance(this).enqueue(request)
 
         WorkManager.getInstance(this).getWorkInfoByIdLiveData(request.id).observe(this) { workInfo ->
+            if (workInfo != null && request.id != convertWorkId) return@observe
             if (workInfo != null) {
                 conversionProgress = workInfo.progress.getInt(ConvertWorker.KEY_PROGRESS_PERCENT, 0) / 100f
                 conversionStage = workInfo.progress.getString(ConvertWorker.KEY_PROGRESS_STAGE) ?: conversionStage
@@ -270,12 +262,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun cancelConversion() {
+    private fun cancelConversion(showToast: Boolean = true) {
+        val wasConverting = isConverting
         convertWorkId?.let {
             WorkManager.getInstance(this).cancelWorkById(it)
         }
-        com.arthenica.ffmpegkit.FFmpegKit.cancel()
+        convertWorkId = null
         isConverting = false
+        if (showToast && wasConverting) {
+            Toast.makeText(this, "Conversion cancelled", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun startScan() {
@@ -326,25 +322,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
         )
-    }
-
-    private fun connectSerial() {
-        val result = serialManager.connect()
-        result.onSuccess { serialConnected = true; Toast.makeText(this, "USB Serial connected", Toast.LENGTH_SHORT).show() }
-            .onFailure { Toast.makeText(this, it.message ?: "Serial connection failed", Toast.LENGTH_LONG).show() }
-    }
-
-    private fun startSerialUpload() {
-        val path = conversionPath ?: return
-        isUploading = true; uploadProgress = 0f
-        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            val result = serialManager.upload(File(path)) { progress -> runOnUiThread { uploadProgress = progress } }
-            runOnUiThread {
-                isUploading = false
-                result.onSuccess { Toast.makeText(this@MainActivity, "Serial upload complete!", Toast.LENGTH_SHORT).show() }
-                    .onFailure { Toast.makeText(this@MainActivity, "Serial upload failed: ${it.message}", Toast.LENGTH_LONG).show() }
-            }
-        }
     }
 
     private fun hasBlePermissions(): Boolean {
@@ -651,17 +628,6 @@ fun ConvertCard(
             ) {
                 Text("Convert to RGB565")
             }
-        }
-    }
-}
-
-@SuppressLint("MissingPermission")
-@Composable
-fun SerialConnectCard(connected: Boolean, onConnect: () -> Unit, onDisconnect: () -> Unit) {
-    StepCard("Step 4: Connect USB Serial") {
-        Text("Connect the ESP32 with a data USB cable at 115200 baud.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
-        Button(onClick = if (connected) onDisconnect else onConnect, modifier = Modifier.fillMaxWidth()) {
-            Text(if (connected) "✕ Disconnect USB" else "🔌 Connect USB Serial")
         }
     }
 }

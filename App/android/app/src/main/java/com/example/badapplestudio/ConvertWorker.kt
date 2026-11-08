@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
 import android.net.Uri
+import android.content.pm.ServiceInfo
 import android.provider.OpenableColumns
 import androidx.work.CoroutineWorker
 import androidx.work.Data
@@ -41,7 +42,15 @@ class ConvertWorker(appContext: Context, workerParams: WorkerParameters) : Corou
             .setContentText("Bad Apple Studio is processing your media.")
             .setOngoing(true)
             .build()
-        return ForegroundInfo(1001, notification)
+        return ForegroundInfo(
+            1001,
+            notification,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            } else {
+                0
+            }
+        )
     }
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {

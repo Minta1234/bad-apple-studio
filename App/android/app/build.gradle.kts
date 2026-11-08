@@ -5,14 +5,14 @@ plugins {
 }
 
 android {
-    namespace = "com.example.badapplestudio"
+    namespace = "com.rzeldent.badapplestudio"
     compileSdk = 36
     defaultConfig {
-        applicationId = "com.example.badapplestudio"
+        applicationId = "com.rzeldent.badapplestudio"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "4.0.1"
     }
 
     buildTypes {
@@ -93,5 +93,4 @@ dependencies {
   // Coil for previews
   implementation("io.coil-kt:coil-compose:2.6.0")
   implementation("io.coil-kt:coil-video:2.6.0")
-  implementation("com.github.mik3y:usb-serial-for-android:3.8.1")
 }

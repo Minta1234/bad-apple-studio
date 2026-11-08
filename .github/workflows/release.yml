@@ -1,0 +1,212 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - 'Release*'
+      - 'release*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name (leave empty to use ReleaseV<version> from package.json)'
+        required: false
+        default: ''
+      release_title:
+        description: 'Release title (leave empty for "Release v<version>")'
+        required: false
+        default: ''
+      draft:
+        description: 'Create draft release'
+        required: false
+        type: boolean
+        default: false
+      prerelease:
+        description: 'Create pre-release'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows App (.exe & .zip)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Electron App
+        run: npx electron-builder --win --publish never
+
+      - name: Prepare Windows artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path windows-dist
+          Get-ChildItem -Path dist -Include *.exe, *.zip, *.blockmap, latest.yml -Recurse | ForEach-Object {
+            Copy-Item -Path $_.FullName -Destination windows-dist/ -Force
+          }
+          Get-ChildItem -Path windows-dist
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts
+          path: windows-dist/*
+          if-no-files-found: error
+
+  build-android:
+    name: Build Android App (.apk)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Make gradlew executable
+        run: chmod +x App/android/gradlew
+
+      - name: Build Android Release APK
+        run: |
+          cd App/android
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Prepare Android artifacts
+        run: |
+          mkdir -p android-dist
+          VERSION=$(node -p "require('./package.json').version")
+          APK_FILE=$(find App/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          if [ -z "$APK_FILE" ]; then
+            echo "Error: No release APK found!"
+            exit 1
+          fi
+          echo "Found release APK at: $APK_FILE"
+          cp "$APK_FILE" "android-dist/BadAppleStudio-v${VERSION}.apk"
+          cp "$APK_FILE" "android-dist/BadAppleStudio.apk"
+          ls -la android-dist
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-artifacts
+          path: android-dist/*
+          if-no-files-found: error
+
+  create-release:
+    name: Create GitHub Release
+    needs: [build-windows, build-android]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-artifacts
+
+      - name: Prepare release files & metadata
+        id: meta
+        run: |
+          mkdir -p release-files
+          find all-artifacts -type f -exec cp {} release-files/ \;
+          echo "Files to upload:"
+          ls -la release-files/
+
+          VERSION=$(node -p "require('./package.json').version")
+          echo "Detected version: $VERSION"
+
+          # Determine Tag Name
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG_NAME="${{ github.ref_name }}"
+          elif [ -n "${{ github.event.inputs.tag_name }}" ]; then
+            TAG_NAME="${{ github.event.inputs.tag_name }}"
+          else
+            TAG_NAME="ReleaseV${VERSION}"
+          fi
+          echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
+
+          # Determine Release Title
+          if [ -n "${{ github.event.inputs.release_title }}" ]; then
+            RELEASE_TITLE="${{ github.event.inputs.release_title }}"
+          else
+            RELEASE_TITLE="Release v${VERSION}"
+          fi
+          echo "title=$RELEASE_TITLE" >> $GITHUB_OUTPUT
+
+          # Extract Changelog section from CHANGELOG.md
+          export VERSION
+          CHANGELOG_BODY=$(node -e "
+            const fs = require('fs');
+            if (!fs.existsSync('CHANGELOG.md')) {
+              console.log('Release v' + process.env.VERSION);
+              process.exit(0);
+            }
+            const content = fs.readFileSync('CHANGELOG.md', 'utf8');
+            const version = process.env.VERSION;
+            const regex = new RegExp('(?:^|\\\n)##\\\s*v?' + version.replace(/\\\./g, '\\\\.') + '[^\\\n]*\\\n([\\\s\\\S]*?)(?=(?:\\\n##\\\s|\\\n---|$))', 'i');
+            const match = content.match(regex);
+            const header = '# Bad Apple Studio — Update Log\n\n';
+            if (match) {
+              const headingMatch = content.match(new RegExp('(?:^|\\\n)(##\\\s*v?' + version.replace(/\\\./g, '\\\\.') + '[^\\\n]*)', 'i'));
+              const heading = headingMatch ? headingMatch[1].trim() : ('## v' + version);
+              console.log(header + heading + '\n\n' + match[1].trim());
+            } else {
+              console.log(header + '## v' + version + '\n\n' + content);
+            }
+          " || echo "Release v${VERSION}")
+
+          echo "$CHANGELOG_BODY" > release_notes.md
+          echo "Changelog content:"
+          cat release_notes.md
+
+      - name: Ensure Git tag exists
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          if ! git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG does not exist locally. Creating..."
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "${{ steps.meta.outputs.title }}"
+            git push origin "$TAG" || echo "Tag may already exist on remote"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.title }}
+          body_path: release_notes.md
+          draft: ${{ github.event.inputs.draft || false }}
+          prerelease: ${{ github.event.inputs.prerelease || false }}
+          files: release-files/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
