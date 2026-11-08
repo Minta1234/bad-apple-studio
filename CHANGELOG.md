@@ -4,6 +4,17 @@
 
 
 
+
+## v4.3.0
+
+### 🚀 New Features
+- initialize Android Gradle wrapper and settings configuration (5d623b5)
+
+### 🐛 Bug Fixes & Stability
+- use reliable direct mirror for Gradle distribution to avoid 504 timeouts (628569c)
+
+---
+
 ## v4.2.0
 
 ### 🚀 New Features
