@@ -92,25 +92,44 @@ class BleUploadManager(private val context: Context) {
         }
     }
 
+    private enum class UploadStage {
+        IDLE,
+        WAITING_START_ACK,
+        SENDING_DATA,
+        WAITING_END_ACK,
+        DONE
+    }
+
     fun connectAndUpload(device: BluetoothDevice, datFile: File, onProgress: (Float, String) -> Unit, onComplete: (Boolean, String?) -> Unit) {
         val totalBytes = datFile.length().toInt()
         var bytesUploaded = 0
         var startTime = 0L
         var isCompleted = false
+        val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
         val gattCallback = object : BluetoothGattCallback() {
             private var uploadCharacteristic: BluetoothGattCharacteristic? = null
+            private var hasStatusChar = false
             private var fis: FileInputStream? = null
             private var retryCount = 0
-            private val MAX_RETRIES = 3
+            private val MAX_RETRIES = 4
             private var lastChunk: ByteArray? = null
             private var chunkSize = 180 // Safe default; updated after MTU negotiation
             private var uploadStarted = false
+            private var stage = UploadStage.IDLE
+            private var waitingForFlushAck = false
+            private var startFallbackRunnable: Runnable? = null
+            private var flushFallbackRunnable: Runnable? = null
 
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
+                    try {
+                        gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+                    } catch (_: Exception) {}
                     gatt.requestMtu(512) // Request maximum MTU
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                    startFallbackRunnable?.let { mainHandler.removeCallbacks(it) }
+                    flushFallbackRunnable?.let { mainHandler.removeCallbacks(it) }
                     fis?.close()
                     if (!isCompleted) {
                         isCompleted = true
@@ -136,6 +155,7 @@ class BleUploadManager(private val context: Context) {
                     val statusChar = service?.getCharacteristic(STATUS_UUID)
 
                     if (statusChar != null) {
+                        hasStatusChar = true
                         gatt.setCharacteristicNotification(statusChar, true)
                         val descriptor = statusChar.getDescriptor(CCCD_UUID)
                         if (descriptor != null) {
@@ -165,7 +185,9 @@ class BleUploadManager(private val context: Context) {
                 uploadStarted = true
                 val characteristic = uploadCharacteristic
                 if (characteristic != null) {
+                    stage = UploadStage.WAITING_START_ACK
                     val startCmd = "START:$totalBytes".toByteArray()
+                    lastChunk = startCmd
                     characteristic.value = startCmd
                     characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
                     gatt.writeCharacteristic(characteristic)
@@ -176,6 +198,20 @@ class BleUploadManager(private val context: Context) {
                     }
                     gatt.disconnect()
                 }
+            }
+
+            private fun beginStreamingData(gatt: BluetoothGatt) {
+                if (stage != UploadStage.WAITING_START_ACK || isCompleted) return
+                startFallbackRunnable?.let { mainHandler.removeCallbacks(it) }
+                startFallbackRunnable = null
+                stage = UploadStage.SENDING_DATA
+                startTime = System.currentTimeMillis()
+                fis = FileInputStream(datFile)
+                val characteristic = uploadCharacteristic ?: return
+                // Give the ESP32 100ms after opening /video.dat before streaming chunks
+                mainHandler.postDelayed({
+                    if (!isCompleted) sendNextChunk(gatt, characteristic)
+                }, 100)
             }
 
             @Deprecated("Deprecated in Java")
@@ -190,22 +226,44 @@ class BleUploadManager(private val context: Context) {
             private fun handleStatusNotification(gatt: BluetoothGatt, value: ByteArray?) {
                 if (value == null || isCompleted) return
                 val msg = String(value).trim()
+                if (msg.startsWith("ACK:")) {
+                    if (waitingForFlushAck) {
+                        waitingForFlushAck = false
+                        flushFallbackRunnable?.let { mainHandler.removeCallbacks(it) }
+                        flushFallbackRunnable = null
+                        val characteristic = uploadCharacteristic
+                        if (characteristic != null && !isCompleted) {
+                            mainHandler.post { sendNextChunk(gatt, characteristic) }
+                        }
+                    }
+                    return
+                }
+
                 android.util.Log.i("BleUpload", "Board notification: $msg")
-                if (msg == "OK:DONE") {
+                if (msg == "OK:SPIFFS" || msg == "OK:SD") {
+                    mainHandler.post { beginStreamingData(gatt) }
+                } else if (msg == "OK:DONE") {
+                    stage = UploadStage.DONE
                     isCompleted = true
                     fis?.close()
                     onComplete(true, null)
-                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    mainHandler.postDelayed({
                         try { gatt.disconnect() } catch (_: Exception) {}
                     }, 1200)
                 } else if (msg.startsWith("ERROR:")) {
+                    stage = UploadStage.DONE
                     isCompleted = true
+                    startFallbackRunnable?.let { mainHandler.removeCallbacks(it) }
+                    flushFallbackRunnable?.let { mainHandler.removeCallbacks(it) }
                     fis?.close()
-                    val friendly = when (msg) {
-                        "ERROR:SIZE_MISMATCH" -> "Transfer incomplete — some data was lost in the air. Move closer to the board and try again."
-                        "ERROR:NO_SPACE" -> "Not enough free storage on the board for this file."
-                        "ERROR:WRITE_FAIL" -> "Storage write failed mid-transfer (flash/SD error)."
-                        "ERROR:BAD_SIZE" -> "Board rejected the file size."
+                    val friendly = when {
+                        msg.startsWith("ERROR:SIZE_MISMATCH") -> {
+                            val details = if (msg.length > "ERROR:SIZE_MISMATCH:".length) " (${msg.substringAfter("ERROR:SIZE_MISMATCH:")} bytes)" else ""
+                            "Transfer incomplete$details — some data was lost in the air. Move closer to the board and try again."
+                        }
+                        msg == "ERROR:NO_SPACE" -> "Not enough free storage on the board for this file."
+                        msg == "ERROR:WRITE_FAIL" -> "Storage write failed mid-transfer (flash/SD error)."
+                        msg == "ERROR:BAD_SIZE" -> "Board rejected the file size."
                         else -> msg
                     }
                     onComplete(false, friendly)
@@ -214,6 +272,7 @@ class BleUploadManager(private val context: Context) {
             }
 
             override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+                if (isCompleted) return
                 if (status != BluetoothGatt.GATT_SUCCESS) {
                     retryCount++
                     if (retryCount > MAX_RETRIES) {
@@ -224,9 +283,10 @@ class BleUploadManager(private val context: Context) {
                         gatt.disconnect()
                         return
                     }
-                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    mainHandler.postDelayed({
                         lastChunk?.let {
                             characteristic.value = it
+                            characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
                             gatt.writeCharacteristic(characteristic)
                         }
                     }, (200 * retryCount).toLong())
@@ -234,45 +294,67 @@ class BleUploadManager(private val context: Context) {
                 }
 
                 retryCount = 0
-                val written = characteristic.value
-                val writtenString = String(written)
 
-                if (writtenString.startsWith("START:")) {
-                    startTime = System.currentTimeMillis()
-                    fis = FileInputStream(datFile)
-                    sendNextChunk(gatt, characteristic)
-                } else if (writtenString == "END") {
-                    fis?.close()
-                    // Wait for board's OK:DONE / ERROR status notification, with 8s fallback timeout
-                    val handler = android.os.Handler(android.os.Looper.getMainLooper())
-                    handler.postDelayed({
-                        if (!isCompleted) {
-                            isCompleted = true
-                            onComplete(true, null)
-                            try { gatt.disconnect() } catch (_: Exception) {}
+                when (stage) {
+                    UploadStage.WAITING_START_ACK -> {
+                        // Wait for OK:SPIFFS / OK:SD notification from board, with 2.5s fallback for legacy firmware
+                        val fallback = Runnable {
+                            beginStreamingData(gatt)
                         }
-                    }, 8000)
-                } else {
-                    bytesUploaded += written.size
-                    val elapsed = System.currentTimeMillis() - startTime
-                    var speedStr = ""
-                    if (elapsed > 0) {
-                        val speedBps = (bytesUploaded.toDouble() / elapsed) * 1000
-                        val speedKbps = speedBps / 1024.0
-                        val uploadedKb = bytesUploaded / 1024.0
-                        val totalKb = totalBytes / 1024.0
-                        speedStr = String.format("%.1f KB/s  •  %.1f / %.1f KB", speedKbps, uploadedKb, totalKb)
+                        startFallbackRunnable = fallback
+                        mainHandler.postDelayed(fallback, if (hasStatusChar) 2500L else 300L)
                     }
-                    onProgress(bytesUploaded.toFloat() / totalBytes, speedStr)
+                    UploadStage.SENDING_DATA -> {
+                        val chunkLen = lastChunk?.size ?: 0
+                        val prevBytes = bytesUploaded
+                        bytesUploaded += chunkLen
+                        val elapsed = System.currentTimeMillis() - startTime
+                        var speedStr = ""
+                        if (elapsed > 0) {
+                            val speedBps = (bytesUploaded.toDouble() / elapsed) * 1000
+                            val speedKbps = speedBps / 1024.0
+                            val uploadedKb = bytesUploaded / 1024.0
+                            val totalKb = totalBytes / 1024.0
+                            speedStr = String.format("%.1f KB/s  •  %.1f / %.1f KB", speedKbps, uploadedKb, totalKb)
+                        }
+                        onProgress(bytesUploaded.toFloat() / totalBytes, speedStr)
 
-                    // 35ms delay ensures ESP32 SPIFFS flash writes keep up and never drop bytes
-                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                        sendNextChunk(gatt, characteristic)
-                    }, 35)
+                        val crossesFlushBoundary = (prevBytes / 2048) != (bytesUploaded / 2048)
+                        if (crossesFlushBoundary) {
+                            // Wait for board's ACK:<bytes> after 2KB SPIFFS write, or 90ms fallback for older firmware
+                            waitingForFlushAck = true
+                            val fallback = Runnable {
+                                if (waitingForFlushAck && !isCompleted) {
+                                    waitingForFlushAck = false
+                                    flushFallbackRunnable = null
+                                    sendNextChunk(gatt, characteristic)
+                                }
+                            }
+                            flushFallbackRunnable = fallback
+                            mainHandler.postDelayed(fallback, 90L)
+                        } else {
+                            mainHandler.postDelayed({
+                                if (!isCompleted) sendNextChunk(gatt, characteristic)
+                            }, 6L)
+                        }
+                    }
+                    UploadStage.WAITING_END_ACK -> {
+                        fis?.close()
+                        // Wait for board's OK:DONE / ERROR status notification, with 8s fallback timeout
+                        mainHandler.postDelayed({
+                            if (!isCompleted) {
+                                isCompleted = true
+                                onComplete(true, null)
+                                try { gatt.disconnect() } catch (_: Exception) {}
+                            }
+                        }, 8000L)
+                    }
+                    else -> {}
                 }
             }
 
             private fun sendNextChunk(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
+                if (isCompleted) return
                 val buffer = ByteArray(chunkSize)
                 val bytesRead = fis?.read(buffer) ?: -1
 
@@ -283,11 +365,17 @@ class BleUploadManager(private val context: Context) {
                     characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
                     gatt.writeCharacteristic(characteristic)
                 } else {
-                    val endCmd = "END".toByteArray()
-                    lastChunk = endCmd
-                    characteristic.value = endCmd
-                    characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                    gatt.writeCharacteristic(characteristic)
+                    // Wait 100ms before sending END so the final chunk is completely processed
+                    mainHandler.postDelayed({
+                        if (!isCompleted) {
+                            stage = UploadStage.WAITING_END_ACK
+                            val endCmd = "END".toByteArray()
+                            lastChunk = endCmd
+                            characteristic.value = endCmd
+                            characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                            gatt.writeCharacteristic(characteristic)
+                        }
+                    }, 100L)
                 }
             }
         }

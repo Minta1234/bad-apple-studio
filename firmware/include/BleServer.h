@@ -49,16 +49,29 @@ class ServerCallbacks: public BLEServerCallbacks {
 static uint8_t bleWriteBuf[2048];
 static size_t  bleWriteBufLen = 0;
 
-static void flushBleBuffer() {
+static bool flushBleBuffer(bool sendAck = false) {
     if (bleWriteBufLen > 0 && videoFile) {
-        size_t written = videoFile.write(bleWriteBuf, bleWriteBufLen);
-        if (written != bleWriteBufLen) {
+        size_t toWrite = bleWriteBufLen;
+        bleWriteBufLen = 0;
+        size_t written = videoFile.write(bleWriteBuf, toWrite);
+        if (written != toWrite) {
             Serial.println("BLE: write failed mid-transfer — aborting");
             endVideoReceive(true);
             notifyStatus("ERROR:WRITE_FAIL");
+            return false;
         }
-        bleWriteBufLen = 0;
+        if (sendAck) {
+            char ackMsg[32];
+            snprintf(ackMsg, sizeof(ackMsg), "ACK:%u", receivedUploadBytes);
+            notifyStatus(ackMsg);
+        }
     }
+    return true;
+}
+
+static bool isStartCommand(const std::string& s) {
+    if (s.rfind("START:", 0) != 0 || s.length() < 7 || s.length() > 24) return false;
+    return s[6] >= '0' && s[6] <= '9';
 }
 
 class CharacteristicCallbacks: public BLECharacteristicCallbacks {
@@ -66,15 +79,16 @@ class CharacteristicCallbacks: public BLECharacteristicCallbacks {
         std::string rxValue = pCharacteristic->getValue();
         if (rxValue.empty()) return;
 
-        if (rxValue.rfind("START:", 0) == 0) {
+        if (isStartCommand(rxValue)) {
             bleWriteBufLen = 0;
             uint32_t expectedBytes = (uint32_t)strtoul(rxValue.c_str() + 6, nullptr, 10);
+            bool forceSD = (rxValue.find(":SD") != std::string::npos || rxValue.find(":sd") != std::string::npos);
             if (expectedBytes == 0) {
                 Serial.println("BLE: START with invalid/zero size");
                 notifyStatus("ERROR:BAD_SIZE");
                 return;
             }
-            if (beginVideoReceive(expectedBytes)) {
+            if (beginVideoReceive(expectedBytes, forceSD)) {
                 Serial.printf("BLE: Started receiving video (%u bytes, target=%s)\n",
                               expectedBytes, uploadTargetIsSD() ? "SD" : "SPIFFS");
                 notifyStatus(uploadTargetIsSD() ? "OK:SD" : "OK:SPIFFS");
@@ -83,18 +97,20 @@ class CharacteristicCallbacks: public BLECharacteristicCallbacks {
                 notifyStatus("ERROR:NO_SPACE");
             }
 
-        } else if (rxValue == "END") {
-            flushBleBuffer();
+        } else if (rxValue == "END" && (!isReceivingVideo || receivedUploadBytes >= expectedUploadBytes || rxValue.length() == 3)) {
+            if (!flushBleBuffer(false)) return;
             isReceivingVideo = false;
-            bool complete = (receivedUploadBytes == expectedUploadBytes);
+            bool complete = (receivedUploadBytes == expectedUploadBytes && expectedUploadBytes > 0);
             endVideoReceive(!complete);
             if (complete) {
-                Serial.println("BLE: Finished receiving video");
+                Serial.printf("BLE: Finished receiving video (%u bytes)\n", receivedUploadBytes);
                 notifyStatus("OK:DONE");
             } else {
                 Serial.printf("BLE: Size mismatch — got %u of %u bytes\n",
                               receivedUploadBytes, expectedUploadBytes);
-                notifyStatus("ERROR:SIZE_MISMATCH");
+                char errMsg[48];
+                snprintf(errMsg, sizeof(errMsg), "ERROR:SIZE_MISMATCH:%u/%u", receivedUploadBytes, expectedUploadBytes);
+                notifyStatus(errMsg);
             }
 
         } else {
@@ -112,7 +128,7 @@ class CharacteristicCallbacks: public BLECharacteristicCallbacks {
                     len -= toCopy;
 
                     if (bleWriteBufLen >= sizeof(bleWriteBuf)) {
-                        flushBleBuffer();
+                        if (!flushBleBuffer(true)) return;
                     }
                 }
             }

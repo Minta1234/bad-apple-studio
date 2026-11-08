@@ -108,6 +108,60 @@ static bool readAndRenderColorFrame();
 // every successful BLE upload, so playback and reloadVideo() always agree.
 static bool videoOnSD = false;
 
+static void showStandbyScreen() {
+#if defined(DISPLAY_DRIVER_TFT) || defined(DISPLAY_DRIVER_ILI9341) || defined(DISPLAY_DRIVER_ST7789)
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextColor(TFT_CYAN, TFT_BLACK);
+  tft.setTextSize(2);
+  tft.setCursor(20, 35);
+  tft.println("Bad Apple Studio");
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setCursor(20, 75);
+  tft.println("Ready for upload via Bluetooth");
+  tft.setTextColor(TFT_GREEN, TFT_BLACK);
+  tft.setCursor(20, 105);
+  tft.println("Device: BadApple_Studio");
+  tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  tft.setCursor(20, 135);
+  tft.println("Open app and tap Scan / Connect");
+#elif defined(DISPLAY_DRIVER_ARDUINO_GFX)
+  gfx->fillScreen(BLACK);
+  gfx->setTextColor(CYAN);
+  gfx->setTextSize(2);
+  gfx->setCursor(20, 35);
+  gfx->println("Bad Apple Studio");
+  gfx->setTextSize(1);
+  gfx->setTextColor(WHITE);
+  gfx->setCursor(20, 75);
+  gfx->println("Ready for upload via Bluetooth");
+  gfx->setTextColor(GREEN);
+  gfx->setCursor(20, 105);
+  gfx->println("Device: BadApple_Studio");
+#elif defined(DISPLAY_DRIVER_SSD1306) || defined(DISPLAY_DRIVER_SH1106) || defined(DISPLAY_DRIVER_U8G2_CUSTOM)
+  u8g2.clearBuffer();
+  u8g2.sendBuffer();
+#endif
+}
+
+static bool isValidVideoFile(File& f, VideoHeader& hdr) {
+  if (!f) return false;
+  size_t fileSize = f.size();
+  if (fileSize <= sizeof(VideoHeader)) return false;
+  if (f.read((uint8_t*)&hdr, sizeof(hdr)) != sizeof(hdr)) return false;
+  if (hdr.width == 0 || hdr.width > 800 || hdr.height == 0 || hdr.height > 800 || hdr.frameCount == 0) {
+    return false;
+  }
+  if (hdr.colorMode == 2) {
+    uint32_t minFrameSize = sizeof(VideoHeader) + 4UL + (uint32_t)hdr.width * hdr.height * 2UL;
+    if (fileSize < minFrameSize) {
+      Serial.printf("Corrupt/partial color video.dat: size=%u < min=%u\n", (unsigned)fileSize, (unsigned)minFrameSize);
+      return false;
+    }
+  }
+  return true;
+}
+
 void reloadVideo() {
   currentFrame = 0;
   lastFrameAt = 0;
@@ -117,7 +171,7 @@ void reloadVideo() {
 #else
   videoFile = SPIFFS.open("/video.dat", "r");
 #endif
-  if (videoFile && videoFile.read((uint8_t*)&header, sizeof(header)) == sizeof(header)) {
+  if (isValidVideoFile(videoFile, header)) {
     headerEndOffset = sizeof(header);
     if (header.fps > 0) frameIntervalMs = 1000UL / header.fps;
 #if defined(DISPLAY_DRIVER_TFT) || defined(DISPLAY_DRIVER_ILI9341) || defined(DISPLAY_DRIVER_ST7789)
@@ -136,7 +190,9 @@ void reloadVideo() {
       readAndRenderColorFrame();
     }
   } else {
-    Serial.println("Failed to reload video header.");
+    if (videoFile) videoFile.close();
+    Serial.println("Failed to reload video header — showing standby screen.");
+    showStandbyScreen();
   }
 }
 
@@ -208,22 +264,42 @@ uint32_t            receivedUploadBytes = 0;
 // file opened) if neither target has room — the caller reports this upstream
 // so the user knows to insert/replace the microSD card.
 bool beginVideoReceive(uint32_t expectedBytes, bool forceSD) {
+  isReceivingVideo = true;
+  delay(20); // Let any in-flight frame read in loop() on Core 1 finish cleanly
   if (videoFile) videoFile.close();
   expectedUploadBytes = expectedBytes;
   receivedUploadBytes = 0;
 
-  if (!forceSD && (uint64_t)expectedBytes + SPIFFS_RESERVE_BYTES <= spiffsFreeBytes()) {
-    videoFile = SPIFFS.open("/video.dat", "w");
-    if (!videoFile) { uploadTarget = UploadTarget::NONE; return false; }
-    uploadTarget     = UploadTarget::SPIFFS_TARGET;
-    isReceivingVideo = true;
-    return true;
+  // Remove existing /video.dat on SPIFFS upfront so its blocks are freed before
+  // checking spiffsFreeBytes() and before BLE chunks start streaming in.
+  if (!forceSD && (uint64_t)expectedBytes + SPIFFS_RESERVE_BYTES <= SPIFFS.totalBytes()) {
+    if (SPIFFS.exists("/video.dat")) {
+      SPIFFS.remove("/video.dat");
+    }
+    if ((uint64_t)expectedBytes + SPIFFS_RESERVE_BYTES <= spiffsFreeBytes()) {
+      videoFile = SPIFFS.open("/video.dat", "w");
+      if (!videoFile) {
+        uploadTarget     = UploadTarget::NONE;
+        isReceivingVideo = false;
+        return false;
+      }
+      uploadTarget     = UploadTarget::SPIFFS_TARGET;
+      isReceivingVideo = true;
+      return true;
+    }
   }
 
 #ifdef HAS_SD_CARD
   if ((uint64_t)expectedBytes + SD_RESERVE_BYTES <= sdFreeBytes()) {
+    if (SD.exists("/video.dat")) {
+      SD.remove("/video.dat");
+    }
     videoFile = SD.open("/video.dat", "w");
-    if (!videoFile) { uploadTarget = UploadTarget::NONE; return false; }
+    if (!videoFile) {
+      uploadTarget     = UploadTarget::NONE;
+      isReceivingVideo = false;
+      return false;
+    }
     uploadTarget     = UploadTarget::SD_TARGET;
     isReceivingVideo = true;
     return true;
@@ -239,15 +315,24 @@ bool uploadTargetIsSD() { return uploadTarget == UploadTarget::SD_TARGET; }
 
 // Called on BLE "END", or to discard a partial transfer (disconnect / write
 // failure). Only swaps videoOnSD + reloads playback if the full byte count
-// arrived intact — a truncated file is left on disk but never played, and
-// the caller reports the mismatch upstream instead of silently looping stale
-// or corrupt frames.
+// arrived intact — a truncated file is deleted so the board never loops
+// corrupt frames or boots to a black screen.
 void endVideoReceive(bool aborted) {
   if (videoFile) videoFile.close();
   isReceivingVideo = false;
-  if (!aborted && uploadTarget != UploadTarget::NONE && receivedUploadBytes == expectedUploadBytes) {
+  if (!aborted && uploadTarget != UploadTarget::NONE && receivedUploadBytes == expectedUploadBytes && expectedUploadBytes > 0) {
     videoOnSD = uploadTargetIsSD();
     reloadVideo();
+  } else {
+    if (uploadTarget == UploadTarget::SPIFFS_TARGET) {
+      SPIFFS.remove("/video.dat");
+    }
+#ifdef HAS_SD_CARD
+    else if (uploadTarget == UploadTarget::SD_TARGET) {
+      SD.remove("/video.dat");
+    }
+#endif
+    showStandbyScreen();
   }
   uploadTarget = UploadTarget::NONE;
 }
@@ -556,13 +641,14 @@ void setup() {
   if (ensureSDMounted()) {
     videoFile = SD.open("/video.dat", "r");
     if (videoFile) {
-      if (videoFile.read((uint8_t*)&header, sizeof(header)) == sizeof(header)) {
+      if (isValidVideoFile(videoFile, header)) {
         Serial.println("Found valid /video.dat on SD Card!");
         videoOpened = true;
         videoOnSD   = true;
       } else {
-        Serial.println("Invalid header in /video.dat on SD Card.");
+        Serial.println("Invalid/incomplete /video.dat on SD Card — removing.");
         videoFile.close();
+        SD.remove("/video.dat");
       }
     } else {
       Serial.println("No /video.dat on SD Card. Falling back to SPIFFS...");
@@ -578,13 +664,14 @@ void setup() {
     } else {
       videoFile = SPIFFS.open("/video.dat", "r");
       if (videoFile) {
-        if (videoFile.read((uint8_t*)&header, sizeof(header)) == sizeof(header)) {
+        if (isValidVideoFile(videoFile, header)) {
           Serial.println("Opened valid /video.dat from SPIFFS");
           videoOpened = true;
           videoOnSD   = false;
         } else {
-          Serial.println("Invalid header in /video.dat on SPIFFS.");
+          Serial.println("Invalid/incomplete /video.dat on SPIFFS — removing.");
           videoFile.close();
+          SPIFFS.remove("/video.dat");
         }
       } else {
         Serial.println("No /video.dat found on SPIFFS.");
@@ -604,36 +691,7 @@ void setup() {
     }
   } else {
     // Show standby screen so user knows board is alive and ready for Bluetooth upload
-#if defined(DISPLAY_DRIVER_TFT) || defined(DISPLAY_DRIVER_ILI9341) || defined(DISPLAY_DRIVER_ST7789)
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextColor(TFT_CYAN, TFT_BLACK);
-    tft.setTextSize(2);
-    tft.setCursor(20, 35);
-    tft.println("Bad Apple Studio");
-    tft.setTextSize(1);
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.setCursor(20, 75);
-    tft.println("Ready for upload via Bluetooth");
-    tft.setTextColor(TFT_GREEN, TFT_BLACK);
-    tft.setCursor(20, 105);
-    tft.println("Device: BadApple_Studio");
-    tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
-    tft.setCursor(20, 135);
-    tft.println("Open app and tap Scan / Connect");
-#elif defined(DISPLAY_DRIVER_ARDUINO_GFX)
-    gfx->fillScreen(BLACK);
-    gfx->setTextColor(CYAN);
-    gfx->setTextSize(2);
-    gfx->setCursor(20, 35);
-    gfx->println("Bad Apple Studio");
-    gfx->setTextSize(1);
-    gfx->setTextColor(WHITE);
-    gfx->setCursor(20, 75);
-    gfx->println("Ready for upload via Bluetooth");
-    gfx->setTextColor(GREEN);
-    gfx->setCursor(20, 105);
-    gfx->println("Device: BadApple_Studio");
-#endif
+    showStandbyScreen();
     Serial.println("Waiting for video upload via BLE or USB...");
   }
 

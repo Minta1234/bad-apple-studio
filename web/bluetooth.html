@@ -507,8 +507,8 @@
     const SERVICE_UUID = '12345678-1234-5678-1234-56789abcdef0';
     const CHARACTERISTIC_UUID = '12345678-1234-5678-1234-56789abcdef1';
     const STATUS_CHAR_UUID = '12345678-1234-5678-1234-56789abcdef2';
-    const CHUNK_SIZE = 490; // bytes per BLE write (keep under 512 MTU)
-    const ACK_TIMEOUT_MS = 2000; // how long to wait for a board status notification
+    const CHUNK_SIZE = 240; // 240 bytes fits inside standard 247-byte BLE 4.2/5.0 MTU without truncation
+    const ACK_TIMEOUT_MS = 8000; // how long to wait for a board status notification
     const SERIAL_CHUNK_SIZE = 256; // safe at the firmware's 115200 baud rate
 
     // ── State ─────────────────────────────────────────────────────────────────────
@@ -522,6 +522,7 @@
     let availableBoards = [];
     let uploadAborted = false;   // set true if the board reports an error mid-transfer
     let pendingAck = null;    // resolver for the status notification we're waiting on
+    let pendingFlushAck = null; // resolver for 2KB SPIFFS buffer flush ACK
     let uploadMode = 'bluetooth';
     let serialPort = null;
     let serialReader = null;
@@ -762,6 +763,7 @@
         // Default to SPIFFS: the backend automatically reduces FPS/resolution
         // to keep BLE uploads practical. SD mode is intentionally opt-in.
         formData.append('forSdCard', useSdCard.checked ? 'true' : 'false');
+        formData.append('skipFirmware', 'true');
         const response = await fetch('/api/jobs/convert', { method: 'POST', body: formData, headers: { 'ngrok-skip-browser-warning': 'true' } });
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || 'Conversion could not start.');
@@ -1014,6 +1016,7 @@
       bleChar = null;
       bleStatusChar = null;
       settleAck(null); // don't leave uploadFile() hanging on a promise that'll never resolve
+      settleFlushAck(null);
       setStatus('disconnected', '⬤ Disconnected');
       log('🔌 Device disconnected.');
       scanSection.style.display = 'block';
@@ -1022,10 +1025,14 @@
     }
 
     // ── Board status notifications ───────────────────────────────────────────────
-    // Codes: OK:SPIFFS | OK:SD | OK:DONE | ERROR:NO_SPACE | ERROR:SIZE_MISMATCH |
-    //        ERROR:WRITE_FAIL | ERROR:BAD_SIZE
+    // Codes: OK:SPIFFS | OK:SD | OK:DONE | ACK:<bytes> | ERROR:NO_SPACE |
+    //        ERROR:SIZE_MISMATCH | ERROR:WRITE_FAIL | ERROR:BAD_SIZE
     function onStatusNotify(event) {
-      const msg = new TextDecoder().decode(event.target.value);
+      const msg = new TextDecoder().decode(event.target.value).trim();
+      if (msg.startsWith('ACK:')) {
+        settleFlushAck(msg);
+        return;
+      }
       log(`📶 Board: ${msg}`);
 
       if (msg === 'OK:SD') {
@@ -1033,15 +1040,16 @@
         progressLabel.textContent = 'Uploading to SD card...';
       } else if (msg.startsWith('ERROR:')) {
         uploadAborted = true; // stop the send loop even if no one is currently awaiting an ack
+        settleFlushAck(msg);
       }
 
       settleAck(msg);
     }
 
-    function waitForAck() {
+    function waitForAck(timeoutMs = ACK_TIMEOUT_MS) {
       return Promise.race([
         new Promise((resolve) => { pendingAck = resolve; }),
-        sleep(ACK_TIMEOUT_MS).then(() => null), // no status channel, or notification lost — proceed optimistically
+        sleep(timeoutMs).then(() => null), // no status channel, or notification lost — proceed optimistically
       ]);
     }
 
@@ -1049,18 +1057,39 @@
       if (pendingAck) { pendingAck(msg); pendingAck = null; }
     }
 
+    function waitForFlushAck(timeoutMs = 90) {
+      return Promise.race([
+        new Promise((resolve) => { pendingFlushAck = resolve; }),
+        sleep(timeoutMs).then(() => null),
+      ]);
+    }
+
+    function settleFlushAck(msg) {
+      if (pendingFlushAck) { pendingFlushAck(msg); pendingFlushAck = null; }
+    }
+
+    async function writeBle(char, data) {
+      if (typeof char.writeValueWithResponse === 'function') {
+        return await char.writeValueWithResponse(data);
+      }
+      return await char.writeValue(data);
+    }
+
     function friendlyUploadError(code) {
+      if (!code) return 'Unknown board error.';
+      if (code.startsWith('ERROR:SIZE_MISMATCH')) {
+        const details = code.length > 'ERROR:SIZE_MISMATCH:'.length ? ` (${code.slice('ERROR:SIZE_MISMATCH:'.length)} bytes)` : '';
+        return `Transfer incomplete${details} — some data was lost in the air. Move closer to the board and try again.`;
+      }
       switch (code) {
         case 'ERROR:NO_SPACE':
           return 'Not enough free storage on the board for this file. Insert a microSD card (or free one up) and try again.';
-        case 'ERROR:SIZE_MISMATCH':
-          return 'Transfer incomplete — some data was lost in the air. Move closer to the board and try again.';
         case 'ERROR:WRITE_FAIL':
           return 'Storage write failed mid-transfer (card may be full or was removed).';
         case 'ERROR:BAD_SIZE':
           return 'Board rejected the file size — please re-convert the video.';
         default:
-          return code || 'Unknown board error.';
+          return code;
       }
     }
 
@@ -1072,6 +1101,8 @@
 
       uploadBtn.disabled = true;
       progressWrap.style.display = 'block';
+      progressBar.style.width = '0%';
+      progressPct.textContent = '0%';
       setStatus('sending', '⬤ Uploading...');
       uploadAborted = false;
       const totalBytes = fileData.size;
@@ -1082,22 +1113,30 @@
       try {
         // Tell the board how big the file is *before* sending any data, so it can
         // pick SPIFFS vs SD card up front instead of failing partway through.
-        const startAck = bleStatusChar ? waitForAck() : Promise.resolve(null);
-        await bleChar.writeValueWithoutResponse(encoder.encode(`START:${totalBytes}`));
+        const forceSd = useSdCard.checked ? ':SD' : '';
+        const startAck = bleStatusChar ? waitForAck(8000) : Promise.resolve(null);
+        await writeBle(bleChar, encoder.encode(`START:${totalBytes}${forceSd}`));
         const startResult = await startAck;
         if (startResult && startResult.startsWith('ERROR:')) {
           throw new Error(friendlyUploadError(startResult));
         }
+        // Allow SPIFFS/SD open & sector preparation to settle completely
+        await sleep(100);
 
         let sent = 0;
         let retryCount = 0;
-        const MAX_RETRIES = 3;
+        const MAX_RETRIES = 4;
         while (sent < totalBytes) {
           if (uploadAborted) throw new Error('Board aborted the transfer — check its storage.');
 
           const chunk = new Uint8Array(await fileData.slice(sent, sent + CHUNK_SIZE).arrayBuffer());
+          const prevSent = sent;
+          const crossesFlushBoundary = Math.floor(prevSent / 2048) !== Math.floor((prevSent + chunk.byteLength) / 2048);
+
           try {
-            await bleChar.writeValueWithoutResponse(chunk);
+            const flushPromise = (crossesFlushBoundary && bleStatusChar) ? waitForFlushAck(90) : null;
+            // Use writeValueWithResponse so every chunk is GATT-acknowledged by the ESP32
+            await writeBle(bleChar, chunk);
             sent += chunk.byteLength;
             retryCount = 0; // reset on success
 
@@ -1106,19 +1145,31 @@
             progressPct.textContent = pct + '%';
             progressLabel.textContent = `Sending... ${(sent / 1024).toFixed(1)} KB / ${(totalBytes / 1024).toFixed(1)} KB`;
 
-            // Delay to avoid overwhelming the ESP32 BLE buffer (35ms ensures SPIFFS flash write keeps up)
-            await sleep(35);
+            if (crossesFlushBoundary) {
+              // The ESP32's 2KB RAM buffer is flushing to SPIFFS flash right now;
+              // wait for either its ACK notification or the safe 90ms flash write window.
+              if (flushPromise) {
+                await flushPromise;
+              } else {
+                await sleep(90);
+              }
+            } else {
+              await sleep(5);
+            }
           } catch (writeErr) {
             retryCount++;
             if (retryCount > MAX_RETRIES) throw writeErr;
             log(`⚠️ Write error, retrying (${retryCount}/${MAX_RETRIES})...`);
-            await sleep(200 * retryCount); // back off: 200ms, 400ms, 600ms
+            await sleep(200 * retryCount); // back off: 200ms, 400ms, 600ms, 800ms
           }
         }
 
+        // Wait briefly so the last chunk is fully processed before sending END
+        await sleep(100);
+
         // Send END signal and confirm the board actually got every byte intact
-        const endAck = bleStatusChar ? waitForAck() : Promise.resolve(null);
-        await bleChar.writeValueWithoutResponse(encoder.encode('END'));
+        const endAck = bleStatusChar ? waitForAck(8000) : Promise.resolve(null);
+        await writeBle(bleChar, encoder.encode('END'));
         const endResult = await endAck;
         if (endResult && endResult.startsWith('ERROR:')) {
           throw new Error(friendlyUploadError(endResult));

@@ -146,6 +146,7 @@ router.post('/convert', assignJobId, upload.single('video'), async (req, res) =>
   
   // forSdCard: skip SPIFFS size limit and always use full resolution
   const forSdCard = req.body.forSdCard === 'true' && isColor;
+  const skipFirmware = req.body.skipFirmware === 'true';
 
   let W = envConfig.width;
   let H = envConfig.height;
@@ -155,7 +156,7 @@ router.post('/convert', assignJobId, upload.single('video'), async (req, res) =>
   res.status(202).json({ jobId });
 
   // Process in background so we don't block the HTTP response (firmware compile can take minutes)
-  processJob(jobId, req.file.path, { env: displayEnv, fps, threshold, invert, isColor, forSdCard, rotation, zoom, panX, panY, width: W, height: H }).catch((err) => {
+  processJob(jobId, req.file.path, { env: displayEnv, fps, threshold, invert, isColor, forSdCard, skipFirmware, rotation, zoom, panX, panY, width: W, height: H }).catch((err) => {
     updateJob(jobId, { status: 'error', error: err.message });
   });
 });
@@ -238,7 +239,7 @@ router.get('/:id/files/:name', (req, res) => {
   }
 });
 
-async function processJob(jobId, uploadedVideoPath, { env, fps, threshold, invert, isColor, forSdCard, rotation, zoom, panX, panY, width: W, height: H }) {
+async function processJob(jobId, uploadedVideoPath, { env, fps, threshold, invert, isColor, forSdCard, skipFirmware, rotation, zoom, panX, panY, width: W, height: H }) {
   const jobDir      = path.join(JOBS_ROOT, jobId);
   const framesDir   = path.join(jobDir, 'frames');
   const videoDatPath = path.join(jobDir, 'video.dat');
@@ -362,21 +363,23 @@ async function processJob(jobId, uploadedVideoPath, { env, fps, threshold, inver
   fs.rmSync(framesDir,           { recursive: true, force: true });
   fs.rmSync(uploadedVideoPath,   { force: true });
 
-  updateJob(jobId, { status: 'building', progress: 'Compiling firmware...' });
-  const files = await compileFirmware({
-    jobDir,
-    env,
-    videoDatPath,
-    forSdCard,
-    onProgress: (msg) => updateJob(jobId, { progress: msg }),
-    onLog,
-  });
+  if (!skipFirmware) {
+    updateJob(jobId, { status: 'building', progress: 'Compiling firmware...' });
+    const files = await compileFirmware({
+      jobDir,
+      env,
+      videoDatPath,
+      forSdCard,
+      onProgress: (msg) => updateJob(jobId, { progress: msg }),
+      onLog,
+    });
 
-  for (const [name, srcPath] of Object.entries(files)) {
-    fs.copyFileSync(srcPath, path.join(outputDir, `${name}.bin`));
+    for (const [name, srcPath] of Object.entries(files)) {
+      fs.copyFileSync(srcPath, path.join(outputDir, `${name}.bin`));
+    }
   }
 
-  updateJob(jobId, { status: 'done', progress: 'Done — ready to flash' });
+  updateJob(jobId, { status: 'done', progress: skipFirmware ? 'Done — video.dat ready' : 'Done — ready to flash' });
   } finally {
     // Always release the original upload and intermediate frames. This is
     // especially important for large phone videos when ffmpeg or PIO fails.
