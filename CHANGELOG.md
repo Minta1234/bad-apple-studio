@@ -8,6 +8,14 @@
 
 
 
+
+## v4.5.1
+
+### 🐛 Bug Fixes & Stability
+- refresh display immediately on upload complete and disable device auto-selection (2cff7c0)
+
+---
+
 ## v4.5.0
 
 ### 🚀 New Features
