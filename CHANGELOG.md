@@ -15,6 +15,14 @@
 
 
 
+
+## v4.8.1
+
+### 🐛 Bug Fixes & Stability
+- resolve PATH before health check and expand Windows env vars (7e61c45)
+
+---
+
 ## v4.8.0
 
 ### 🚀 New Features
