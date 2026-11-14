@@ -4,12 +4,10 @@ import android.annotation.SuppressLint
 import android.bluetooth.*
 import android.bluetooth.le.*
 import android.content.Context
-import android.os.ParcelUuid
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
 import java.io.File
 import java.io.FileInputStream
 import java.util.UUID
@@ -31,7 +29,7 @@ class BleUploadManager(private val context: Context) {
         } catch (_: SecurityException) {
             null
         }
-    private var bluetoothGatt: BluetoothGatt? = null
+    @Volatile private var bluetoothGatt: BluetoothGatt? = null
 
     // UUIDs must match the ESP32 BleServer.h
     private val SERVICE_UUID = UUID.fromString("12345678-1234-5678-1234-56789abcdef0")
@@ -92,294 +90,143 @@ class BleUploadManager(private val context: Context) {
         }
     }
 
-    private enum class UploadStage {
-        IDLE,
-        WAITING_START_ACK,
-        SENDING_DATA,
-        WAITING_END_ACK,
-        DONE
-    }
+    private data class GattEvent(val kind: String, val status: Int = 0, val value: Int = 0, val message: String = "")
 
     fun connectAndUpload(device: BluetoothDevice, datFile: File, onProgress: (Float, String) -> Unit, onComplete: (Boolean, String?) -> Unit) {
-        val totalBytes = datFile.length().toInt()
-        var bytesUploaded = 0
-        var startTime = 0L
-        var isCompleted = false
-        val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
-
-        val gattCallback = object : BluetoothGattCallback() {
-            private var uploadCharacteristic: BluetoothGattCharacteristic? = null
-            private var hasStatusChar = false
-            private var fis: FileInputStream? = null
-            private var retryCount = 0
-            private val MAX_RETRIES = 4
-            private var lastChunk: ByteArray? = null
-            private var chunkSize = 180 // Safe default; updated after MTU negotiation
-            private var uploadStarted = false
-            private var stage = UploadStage.IDLE
-            private var waitingForFlushAck = false
-            private var startFallbackRunnable: Runnable? = null
-            private var flushFallbackRunnable: Runnable? = null
-
+        if (bluetoothGatt != null) {
+            onComplete(false, "An upload is already running")
+            return
+        }
+        val events = kotlinx.coroutines.channels.Channel<GattEvent>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        val callback = object : BluetoothGattCallback() {
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-                if (newState == BluetoothProfile.STATE_CONNECTED) {
-                    try {
-                        gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
-                    } catch (_: Exception) {}
-                    gatt.requestMtu(512) // Request maximum MTU
-                } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                    startFallbackRunnable?.let { mainHandler.removeCallbacks(it) }
-                    flushFallbackRunnable?.let { mainHandler.removeCallbacks(it) }
-                    fis?.close()
-                    if (!isCompleted) {
-                        isCompleted = true
-                        onComplete(false, "Disconnected")
-                    }
-                    gatt.close()
-                }
+                events.trySend(GattEvent(if (newState == BluetoothProfile.STATE_CONNECTED) "connected" else "disconnected", status))
             }
-
             override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
-                if (status == BluetoothGatt.GATT_SUCCESS) {
-                    // Cap at 240 bytes to ensure SPIFFS flash writes keep up and never drop bytes in the air
-                    chunkSize = (mtu - 3).coerceAtMost(240).coerceAtLeast(20)
-                    android.util.Log.i("BleUpload", "MTU negotiated: $mtu → chunkSize=$chunkSize")
-                }
-                gatt.discoverServices()
+                events.trySend(GattEvent("mtu", status, mtu))
             }
-
             override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-                if (status == BluetoothGatt.GATT_SUCCESS) {
-                    val service = gatt.getService(SERVICE_UUID)
-                    uploadCharacteristic = service?.getCharacteristic(CHAR_UUID)
-                    val statusChar = service?.getCharacteristic(STATUS_UUID)
-
-                    if (statusChar != null) {
-                        hasStatusChar = true
-                        gatt.setCharacteristicNotification(statusChar, true)
-                        val descriptor = statusChar.getDescriptor(CCCD_UUID)
-                        if (descriptor != null) {
-                            descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                            gatt.writeDescriptor(descriptor)
-                        } else {
-                            startUploadSequence(gatt)
-                        }
-                    } else {
-                        startUploadSequence(gatt)
-                    }
-                } else {
-                    if (!isCompleted) {
-                        isCompleted = true
-                        onComplete(false, "Service discovery failed")
-                    }
-                    gatt.disconnect()
-                }
+                events.trySend(GattEvent("services", status))
             }
-
             override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
-                startUploadSequence(gatt)
+                events.trySend(GattEvent("descriptor", status))
             }
-
-            private fun startUploadSequence(gatt: BluetoothGatt) {
-                if (uploadStarted) return
-                uploadStarted = true
-                val characteristic = uploadCharacteristic
-                if (characteristic != null) {
-                    stage = UploadStage.WAITING_START_ACK
-                    val startCmd = "START:$totalBytes".toByteArray()
-                    lastChunk = startCmd
-                    characteristic.value = startCmd
-                    characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                    gatt.writeCharacteristic(characteristic)
-                } else {
-                    if (!isCompleted) {
-                        isCompleted = true
-                        onComplete(false, "Upload characteristic not found")
-                    }
-                    gatt.disconnect()
-                }
+            override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+                events.trySend(GattEvent("write", status))
             }
-
-            private fun beginStreamingData(gatt: BluetoothGatt) {
-                if (stage != UploadStage.WAITING_START_ACK || isCompleted) return
-                startFallbackRunnable?.let { mainHandler.removeCallbacks(it) }
-                startFallbackRunnable = null
-                stage = UploadStage.SENDING_DATA
-                startTime = System.currentTimeMillis()
-                fis = FileInputStream(datFile)
-                val characteristic = uploadCharacteristic ?: return
-                // Give the ESP32 100ms after opening /video.dat before streaming chunks
-                mainHandler.postDelayed({
-                    if (!isCompleted) sendNextChunk(gatt, characteristic)
-                }, 100)
-            }
-
             @Deprecated("Deprecated in Java")
             override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-                handleStatusNotification(gatt, characteristic.value)
+                if (characteristic.uuid == STATUS_UUID) events.trySend(GattEvent("notification", message = String(characteristic.value)))
             }
-
             override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
-                handleStatusNotification(gatt, value)
-            }
-
-            private fun handleStatusNotification(gatt: BluetoothGatt, value: ByteArray?) {
-                if (value == null || isCompleted) return
-                val msg = String(value).trim()
-                if (msg.startsWith("ACK:")) {
-                    if (waitingForFlushAck) {
-                        waitingForFlushAck = false
-                        flushFallbackRunnable?.let { mainHandler.removeCallbacks(it) }
-                        flushFallbackRunnable = null
-                        val characteristic = uploadCharacteristic
-                        if (characteristic != null && !isCompleted) {
-                            mainHandler.post { sendNextChunk(gatt, characteristic) }
-                        }
-                    }
-                    return
-                }
-
-                android.util.Log.i("BleUpload", "Board notification: $msg")
-                if (msg == "OK:SPIFFS" || msg == "OK:SD") {
-                    mainHandler.post { beginStreamingData(gatt) }
-                } else if (msg == "OK:DONE") {
-                    stage = UploadStage.DONE
-                    isCompleted = true
-                    fis?.close()
-                    onComplete(true, null)
-                    mainHandler.postDelayed({
-                        try { gatt.disconnect() } catch (_: Exception) {}
-                    }, 1200)
-                } else if (msg.startsWith("ERROR:")) {
-                    stage = UploadStage.DONE
-                    isCompleted = true
-                    startFallbackRunnable?.let { mainHandler.removeCallbacks(it) }
-                    flushFallbackRunnable?.let { mainHandler.removeCallbacks(it) }
-                    fis?.close()
-                    val friendly = when {
-                        msg.startsWith("ERROR:SIZE_MISMATCH") -> {
-                            val details = if (msg.length > "ERROR:SIZE_MISMATCH:".length) " (${msg.substringAfter("ERROR:SIZE_MISMATCH:")} bytes)" else ""
-                            "Transfer incomplete$details — some data was lost in the air. Move closer to the board and try again."
-                        }
-                        msg == "ERROR:NO_SPACE" -> "Not enough free storage on the board for this file."
-                        msg == "ERROR:WRITE_FAIL" -> "Storage write failed mid-transfer (flash/SD error)."
-                        msg == "ERROR:BAD_SIZE" -> "Board rejected the file size."
-                        else -> msg
-                    }
-                    onComplete(false, friendly)
-                    try { gatt.disconnect() } catch (_: Exception) {}
-                }
-            }
-
-            override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
-                if (isCompleted) return
-                if (status != BluetoothGatt.GATT_SUCCESS) {
-                    retryCount++
-                    if (retryCount > MAX_RETRIES) {
-                        if (!isCompleted) {
-                            isCompleted = true
-                            onComplete(false, "Write failed after $MAX_RETRIES retries (status $status)")
-                        }
-                        gatt.disconnect()
-                        return
-                    }
-                    mainHandler.postDelayed({
-                        lastChunk?.let {
-                            characteristic.value = it
-                            characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                            gatt.writeCharacteristic(characteristic)
-                        }
-                    }, (200 * retryCount).toLong())
-                    return
-                }
-
-                retryCount = 0
-
-                when (stage) {
-                    UploadStage.WAITING_START_ACK -> {
-                        // Wait for OK:SPIFFS / OK:SD notification from board, with 2.5s fallback for legacy firmware
-                        val fallback = Runnable {
-                            beginStreamingData(gatt)
-                        }
-                        startFallbackRunnable = fallback
-                        mainHandler.postDelayed(fallback, if (hasStatusChar) 2500L else 300L)
-                    }
-                    UploadStage.SENDING_DATA -> {
-                        val chunkLen = lastChunk?.size ?: 0
-                        val prevBytes = bytesUploaded
-                        bytesUploaded += chunkLen
-                        val elapsed = System.currentTimeMillis() - startTime
-                        var speedStr = ""
-                        if (elapsed > 0) {
-                            val speedBps = (bytesUploaded.toDouble() / elapsed) * 1000
-                            val speedKbps = speedBps / 1024.0
-                            val uploadedKb = bytesUploaded / 1024.0
-                            val totalKb = totalBytes / 1024.0
-                            speedStr = String.format("%.1f KB/s  •  %.1f / %.1f KB", speedKbps, uploadedKb, totalKb)
-                        }
-                        onProgress(bytesUploaded.toFloat() / totalBytes, speedStr)
-
-                        val crossesFlushBoundary = (prevBytes / 2048) != (bytesUploaded / 2048)
-                        if (crossesFlushBoundary) {
-                            // Wait for board's ACK:<bytes> after 2KB SPIFFS write, or 90ms fallback for older firmware
-                            waitingForFlushAck = true
-                            val fallback = Runnable {
-                                if (waitingForFlushAck && !isCompleted) {
-                                    waitingForFlushAck = false
-                                    flushFallbackRunnable = null
-                                    sendNextChunk(gatt, characteristic)
-                                }
-                            }
-                            flushFallbackRunnable = fallback
-                            mainHandler.postDelayed(fallback, 90L)
-                        } else {
-                            mainHandler.postDelayed({
-                                if (!isCompleted) sendNextChunk(gatt, characteristic)
-                            }, 6L)
-                        }
-                    }
-                    UploadStage.WAITING_END_ACK -> {
-                        fis?.close()
-                        // Wait for board's OK:DONE / ERROR status notification, with 8s fallback timeout
-                        mainHandler.postDelayed({
-                            if (!isCompleted) {
-                                isCompleted = true
-                                onComplete(true, null)
-                                try { gatt.disconnect() } catch (_: Exception) {}
-                            }
-                        }, 8000L)
-                    }
-                    else -> {}
-                }
-            }
-
-            private fun sendNextChunk(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-                if (isCompleted) return
-                val buffer = ByteArray(chunkSize)
-                val bytesRead = fis?.read(buffer) ?: -1
-
-                if (bytesRead > 0) {
-                    val chunk = buffer.copyOf(bytesRead)
-                    lastChunk = chunk
-                    characteristic.value = chunk
-                    characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                    gatt.writeCharacteristic(characteristic)
-                } else {
-                    // Wait 100ms before sending END so the final chunk is completely processed
-                    mainHandler.postDelayed({
-                        if (!isCompleted) {
-                            stage = UploadStage.WAITING_END_ACK
-                            val endCmd = "END".toByteArray()
-                            lastChunk = endCmd
-                            characteristic.value = endCmd
-                            characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                            gatt.writeCharacteristic(characteristic)
-                        }
-                    }, 100L)
-                }
+                if (characteristic.uuid == STATUS_UUID) events.trySend(GattEvent("notification", message = String(value)))
             }
         }
+        val gatt = try {
+            device.connectGatt(context.applicationContext, false, callback, BluetoothDevice.TRANSPORT_LE)
+                ?: error("Unable to create Bluetooth connection")
+        } catch (e: Exception) {
+            events.close()
+            onComplete(false, e.message)
+            return
+        }
+        bluetoothGatt = gatt
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            val board = BleUploadStatus()
+            var success = false
+            var failure: String? = null
+            suspend fun receive(): GattEvent {
+                val event = events.receive()
+                check(event.kind != "disconnected") { "Bluetooth disconnected (status ${event.status})" }
+                if (event.kind == "notification") board.accept(event.message)
+                return event
+            }
+            suspend fun awaitEvent(kind: String): GattEvent = kotlinx.coroutines.withTimeout(30_000L) {
+                var event = receive()
+                while (event.kind != kind) event = receive()
+                check(event.status == BluetoothGatt.GATT_SUCCESS) { "Bluetooth $kind failed (status ${event.status}); restart the upload" }
+                event
+            }
+            suspend fun awaitBoard(condition: () -> Boolean) = kotlinx.coroutines.withTimeout(30_000L) {
+                while (!condition()) receive()
+            }
+            try {
+                val totalBytes = datFile.length()
+                require(datFile.isFile && totalBytes in 1..Int.MAX_VALUE.toLong()) { "Upload file is missing, empty or too large" }
+                awaitEvent("connected")
+                gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+                var chunkSize = 20
+                if (gatt.requestMtu(512)) {
+                    // An unsuccessful negotiation leaves the mandatory 23-byte MTU usable.
+                    val mtu = kotlinx.coroutines.withTimeout(30_000L) {
+                        var event = receive()
+                        while (event.kind != "mtu") event = receive()
+                        event
+                    }
+                    if (mtu.status == BluetoothGatt.GATT_SUCCESS) chunkSize = (mtu.value - 3).coerceIn(20, 240)
+                }
+                check(gatt.discoverServices()) { "Cannot start service discovery" }
+                awaitEvent("services")
+                val service = gatt.getService(SERVICE_UUID) ?: error("Upload service not found")
+                val characteristic = service.getCharacteristic(CHAR_UUID) ?: error("Upload characteristic not found")
+                val status = service.getCharacteristic(STATUS_UUID) ?: error("Board firmware needs upload status notifications; update the firmware")
+                val descriptor = status.getDescriptor(CCCD_UUID) ?: error("Board notification descriptor missing")
+                check(gatt.setCharacteristicNotification(status, true)) { "Cannot enable board notifications" }
+                descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                check(gatt.writeDescriptor(descriptor)) { "Cannot subscribe to board notifications" }
+                awaitEvent("descriptor")
 
-        bluetoothGatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+                suspend fun write(data: ByteArray) {
+                    characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                    characteristic.value = data
+                    // Retrying an ambiguous write can append the same bytes twice: abort instead.
+                    check(gatt.writeCharacteristic(characteristic)) { "Bluetooth rejected a write; restart the upload" }
+                    awaitEvent("write")
+                }
+                FileInputStream(datFile).use { input ->
+                    write("START:$totalBytes".toByteArray())
+                    awaitBoard { board.ready }
+                    val startedAt = android.os.SystemClock.elapsedRealtime()
+                    var lastProgressAt = 0L
+                    var sent = 0
+                    val buffer = ByteArray(chunkSize)
+                    while (sent < totalBytes) {
+                        val length = minOf(chunkSize, 2048 - sent % 2048, (totalBytes - sent).toInt())
+                        val count = input.read(buffer, 0, length)
+                        check(count > 0) { "Upload file ended unexpectedly" }
+                        write(buffer.copyOf(count))
+                        sent += count
+                        if (sent % 2048 == 0) awaitBoard { board.acknowledgedBytes >= sent }
+                        val now = android.os.SystemClock.elapsedRealtime()
+                        if (now - lastProgressAt >= 200 || sent.toLong() == totalBytes) {
+                            val speed = sent * 1000.0 / (now - startedAt).coerceAtLeast(1) / 1024.0
+                            onProgress(sent.toFloat() / totalBytes, String.format("%.1f KB/s  •  %.1f / %.1f KB", speed, sent / 1024.0, totalBytes / 1024.0))
+                            lastProgressAt = now
+                        }
+                    }
+                    board.allowCompletion = true
+                    write("END".toByteArray())
+                    awaitBoard { board.done }
+                }
+                success = true
+            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                failure = "Timed out waiting for Bluetooth or board confirmation; upload was not verified"
+            } catch (e: Exception) {
+                failure = e.message ?: "Bluetooth upload failed"
+            } finally {
+                try {
+                    gatt.disconnect()
+                } catch (e: Exception) {
+                    android.util.Log.w("BleUpload", "Disconnect failed", e)
+                } finally {
+                    gatt.close()
+                    bluetoothGatt = null
+                    events.close()
+                }
+            }
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                onComplete(success, failure)
+            }
+        }
     }
 }
