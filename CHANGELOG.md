@@ -14,6 +14,14 @@
 
 
 
+
+## v4.8.0
+
+### 🚀 New Features
+- add persistent signing keystore and in-app updater (c962d2a)
+
+---
+
 ## v4.7.0
 
 ### 🚀 New Features
