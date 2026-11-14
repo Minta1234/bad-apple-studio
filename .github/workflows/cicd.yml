@@ -134,7 +134,7 @@ jobs:
       has_release: ${{ steps.version_step.outputs.has_release }}
       version: ${{ steps.version_step.outputs.version }}
       tag: ${{ steps.version_step.outputs.tag }}
-      ref: ${{ steps.version_step.outputs.ref }}
+      ref: ${{ steps.push_step.outputs.ref || steps.version_step.outputs.ref }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -176,6 +176,7 @@ jobs:
           fi
 
       - name: Commit version bump & push tag
+        id: push_step
         if: steps.version_step.outputs.has_release == 'true' && steps.version_step.outputs.tag != ''
         run: |
           VERSION="${{ steps.version_step.outputs.version }}"
@@ -188,12 +189,33 @@ jobs:
           # Only commit if files changed
           if ! git diff-index --quiet HEAD --; then
             git commit -m "chore(release): bump version to ${VERSION} [skip ci]"
-            git push origin HEAD:main
+            for attempt in 1 2 3; do
+              git push origin HEAD:main && break || {
+                echo "Push main attempt $attempt failed, retrying..."
+                git fetch origin main && git rebase origin/main || true
+                sleep 3
+              }
+              if [ "$attempt" -eq 3 ]; then
+                echo "Failed to push main after 3 attempts."
+                exit 1
+              fi
+            done
           fi
 
-          git tag -a "$TAG" -m "Release v${VERSION}" || true
-          git push origin "$TAG" --force
-          echo "ref=$TAG" >> $GITHUB_OUTPUT
+          git tag -f -a "$TAG" -m "Release v${VERSION}"
+          TAG_PUSHED=false
+          for attempt in 1 2 3; do
+            if git push origin "refs/tags/${TAG}" --force; then
+              TAG_PUSHED=true
+              break
+            fi
+            echo "Tag push attempt $attempt failed, retrying in 3s..."
+            sleep 3
+          done
+          if [ "$TAG_PUSHED" != "true" ]; then
+            echo "::warning::Direct git tag push for ${TAG} failed; publish-release will create the tag via GitHub Releases API."
+          fi
+          echo "ref=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
 
   # =========================================================================
   # 3. CD BUILD ARTIFACTS STAGE (Windows & Android in parallel)
@@ -393,6 +415,7 @@ jobs:
           gh release delete "$TAG" --yes || true
 
           gh release create "$TAG" "${ASSETS[@]}" \
+            --target "${{ needs.prepare-release.outputs.ref || 'main' }}" \
             --title "Release v${VERSION}" \
             --notes-file release_notes.md
 
