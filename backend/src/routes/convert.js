@@ -54,22 +54,27 @@ const PART_OFFSETS = {
 // hardcoded to classic ESP32 values.
 // Ref: https://docs.espressif.com/projects/esptool/en/latest/esp32s3/advanced-topics/firmware-image-format.html
 const CHIP_INFO = {
-  esp32dev:             { chipFamily: 'ESP32',    bootloaderOffset: 0x1000 },
-  'esp32s3box':         { chipFamily: 'ESP32-S3', bootloaderOffset: 0x0    },
-  'lolin_s3_mini':      { chipFamily: 'ESP32-S3', bootloaderOffset: 0x0    },
-  'esp32-s3-devkitc-1': { chipFamily: 'ESP32-S3', bootloaderOffset: 0x0    },
-  'esp32-c3-devkitm-1': { chipFamily: 'ESP32-C3', bootloaderOffset: 0x0    },
-  'esp32-s2-saola-1':   { chipFamily: 'ESP32-S2', bootloaderOffset: 0x1000 },
+  esp32dev:               { chipFamily: 'ESP32',    bootloaderOffset: 0x1000 },
+  lolin32:                { chipFamily: 'ESP32',    bootloaderOffset: 0x1000 },
+  'nodemcu-32s':          { chipFamily: 'ESP32',    bootloaderOffset: 0x1000 },
+  'esp32doit-devkit-v1':  { chipFamily: 'ESP32',    bootloaderOffset: 0x1000 },
+  'esp32s3box':           { chipFamily: 'ESP32-S3', bootloaderOffset: 0x0    },
+  'lolin_s3_mini':        { chipFamily: 'ESP32-S3', bootloaderOffset: 0x0    },
+  'esp32-s3-devkitc-1':   { chipFamily: 'ESP32-S3', bootloaderOffset: 0x0    },
+  'esp32-c3-devkitm-1':   { chipFamily: 'ESP32-C3', bootloaderOffset: 0x0    },
+  'esp32-s2-saola-1':     { chipFamily: 'ESP32-S2', bootloaderOffset: 0x1000 },
+  esp32s2:                { chipFamily: 'ESP32-S2', bootloaderOffset: 0x1000 },
+  esp32c3:                { chipFamily: 'ESP32-C3', bootloaderOffset: 0x0    },
 };
 
 function getChipInfo(board) {
-  const info = CHIP_INFO[board];
-  if (!info) {
-    // Fail loudly instead of silently flashing wrong offsets to an
-    // unmapped board — add the board to CHIP_INFO instead of relaxing this.
-    throw new Error(`Unknown platformio board "${board}" — add it to CHIP_INFO in convert.js`);
-  }
-  return info;
+  const key = String(board || '').trim().toLowerCase();
+  if (CHIP_INFO[key]) return CHIP_INFO[key];
+  if (key.includes('s3')) return { chipFamily: 'ESP32-S3', bootloaderOffset: 0x0 };
+  if (key.includes('c3')) return { chipFamily: 'ESP32-C3', bootloaderOffset: 0x0 };
+  if (key.includes('s2')) return { chipFamily: 'ESP32-S2', bootloaderOffset: 0x1000 };
+  if (key) return { chipFamily: 'ESP32', bootloaderOffset: 0x1000 };
+  throw new Error(`Unknown platformio board "${board}" — add it to CHIP_INFO in convert.js`);
 }
 
 const upload = multer({

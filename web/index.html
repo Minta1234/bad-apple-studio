@@ -773,10 +773,10 @@
         <label class="form-label text-sub fw-bold mb-1" style="font-size:0.85rem;">Base Board (PlatformIO ID)</label>
         <select id="cbBoardId" class="form-select bg-dark text-eye border-secondary" onchange="updateCbDefaultPins()">
           <option value="esp32dev">ESP32 (Standard)</option>
-          <option value="esp32s2">ESP32-S2</option>
+          <option value="esp32-s2-saola-1">ESP32-S2</option>
           <option value="esp32s3box">ESP32-S3</option>
           <option value="esp32-s3-devkitc-1">ESP32-S3 Super Mini</option>
-          <option value="esp32c3">ESP32-C3</option>
+          <option value="esp32-c3-devkitm-1">ESP32-C3</option>
           <option value="lolin32">Lolin32</option>
         </select>
       </div>
@@ -1775,8 +1775,34 @@
     }
 
     async function bmInstall(libName, libDeps, version) {
-      const boardId = prompt(`Enter the PlatformIO board ID to use with "${libName}":\n(e.g. esp32dev, esp32s3box, lolin32)`, 'esp32dev');
-      if (!boardId) return;
+      const rawBoardId = prompt(`Enter the PlatformIO board ID to use with "${libName}":\n(e.g. esp32dev, esp32-s3-devkitc-1, esp32-c3-devkitm-1, lolin32)`, 'esp32dev');
+      if (!rawBoardId || !rawBoardId.trim()) return;
+
+      const aliases = {
+        esp32dev: 'esp32dev',
+        esp32: 'esp32dev',
+        esp32s2: 'esp32-s2-saola-1',
+        esp32c3: 'esp32-c3-devkitm-1',
+        esp32s3: 'esp32-s3-devkitc-1'
+      };
+      const compact = rawBoardId.trim().toLowerCase().replace(/[\s_-]+/g, '');
+      const boardId = aliases[compact] || rawBoardId.trim().toLowerCase().replace(/\s+/g, '-');
+      const libSlug = (libName || 'board').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 20) || 'board';
+      const envName = `custom-${boardId}-${libSlug}`.replace(/[^a-zA-Z0-9_-]/g, '-');
+
+      const lowerLib = `${libName || ''} ${libDeps || ''}`.toLowerCase();
+      let driver = 'SSD1306';
+      let width = 128;
+      let height = 64;
+      if (lowerLib.includes('ili9341')) {
+        driver = 'ILI9341'; width = 320; height = 240;
+      } else if (lowerLib.includes('st7789')) {
+        driver = 'ST7789'; width = 240; height = 240;
+      } else if (lowerLib.includes('tft')) {
+        driver = 'ILI9341'; width = 320; height = 240;
+      } else if (lowerLib.includes('sh1106')) {
+        driver = 'SH1106'; width = 128; height = 64;
+      }
 
       const list = document.getElementById('bmList');
       list.innerHTML = `<div class="text-sub" style="padding:20px 0; text-align:center;">
@@ -1789,17 +1815,22 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            envName: `custom-${boardId}`,
+            envName,
             boardId,
+            library: libName,
+            driver,
+            width,
+            height,
             libDeps: [libDeps || libName],
             buildFlags: ['-D CUSTOM_BOARD_PINS=1']
           })
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error);
+        const addedEnv = data.envName || envName;
         await bmRenderInstalled();
         loadEnvironments();
-        alert(`✓ Installed ${libName} as [env:custom-${boardId}]\nBackground compilation has started.`);
+        alert(`✓ Installed ${libName} as [env:${addedEnv}] (board: ${data.boardId || boardId})\nBackground compilation has started.`);
       } catch (e) {
         alert('Install failed: ' + e.message);
         await bmRenderInstalled();
@@ -1826,10 +1857,10 @@
     // ── Custom Board Builder Logic ─────────────────────────────
     const BOARD_PIN_DEFAULTS = {
       esp32dev: { sda: 21, scl: 22, mosi: 23, sck: 18, cs: 15, dc: 2, rst: 4 },
-      esp32s2: { sda: 8, scl: 9, mosi: 11, sck: 12, cs: 10, dc: 14, rst: 15 },
+      'esp32-s2-saola-1': { sda: 8, scl: 9, mosi: 11, sck: 12, cs: 10, dc: 14, rst: 15 },
       esp32s3box: { sda: 8, scl: 9, mosi: 11, sck: 12, cs: 10, dc: 4, rst: 5 },
       'esp32-s3-devkitc-1': { sda: 8, scl: 9, mosi: 11, sck: 12, cs: 10, dc: 4, rst: 5 },
-      esp32c3: { sda: 8, scl: 9, mosi: 6, sck: 4, cs: 7, dc: 2, rst: 3 },
+      'esp32-c3-devkitm-1': { sda: 8, scl: 9, mosi: 6, sck: 4, cs: 7, dc: 2, rst: 3 },
       lolin32: { sda: 21, scl: 22, mosi: 23, sck: 18, cs: 15, dc: 2, rst: 4 }
     };
 

@@ -1,8 +1,9 @@
 'use strict';
 
 const express = require('express');
+const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { exec } = require('child_process');
 const https = require('https');
 const cors = require('cors');
 
@@ -17,18 +18,46 @@ app.use(express.static(path.join(__dirname, '..', 'web')));
 app.use('/api/jobs',     jobsRouter);
 app.use('/api/firmware', firmwareRouter);
 
-// Health check — verifies required dependencies are installed
-app.get('/api/health', (req, res) => {
-  const check = (cmd) => {
-    try { execSync(cmd, { stdio: 'pipe', windowsHide: true }); return true; }
-    catch (_) { return false; }
-  };
-  res.json({
-    ffmpeg: check('ffmpeg -version'),
-    pio:    check('pio --version'),
-    python: check('python --version'),
-    node:   true, // we are running, so node is present
+// Fast liveness endpoint for Electron startup polling
+app.get('/api/ping', (req, res) => {
+  res.json({ ok: true });
+});
+
+let healthCache = null;
+let healthRefreshing = null;
+
+function checkCmdAsync(cmd) {
+  return new Promise((resolve) => {
+    exec(cmd, { windowsHide: true, timeout: 4000 }, (err) => resolve(!err));
   });
+}
+
+async function refreshHealthCache() {
+  if (healthRefreshing) return healthRefreshing;
+  healthRefreshing = Promise.all([
+    checkCmdAsync('ffmpeg -version'),
+    checkCmdAsync('pio --version'),
+    checkCmdAsync('python --version'),
+  ]).then(([ffmpeg, pio, python]) => {
+    healthCache = { ffmpeg, pio, python, node: true, ts: Date.now() };
+    return healthCache;
+  }).finally(() => {
+    healthRefreshing = null;
+  });
+  return healthRefreshing;
+}
+
+// Health check — returns cached async checks immediately without blocking the event loop
+app.get('/api/health', async (req, res) => {
+  if (healthCache) {
+    res.json(healthCache);
+    if (Date.now() - healthCache.ts > 30000) {
+      void refreshHealthCache();
+    }
+    return;
+  }
+  const result = await refreshHealthCache();
+  res.json(result);
 });
 
 // Search PlatformIO Library Registry for display libraries by keyword
@@ -60,38 +89,147 @@ app.get('/api/boards/search', (req, res) => {
   });
 });
 
-const fs = require('fs');
+const BOARD_ID_ALIASES = {
+  esp32: 'esp32dev',
+  esp32dev: 'esp32dev',
+  esp32devkit: 'esp32dev',
+  esp32devkitv1: 'esp32dev',
+  esp32doitdevkitv1: 'esp32doit-devkit-v1',
+  esp32s2: 'esp32-s2-saola-1',
+  esp32s2saola1: 'esp32-s2-saola-1',
+  esp32s3: 'esp32-s3-devkitc-1',
+  esp32s3devkitc1: 'esp32-s3-devkitc-1',
+  esp32s3supermini: 'esp32-s3-devkitc-1',
+  esp32c3: 'esp32-c3-devkitm-1',
+  esp32c3devkitm1: 'esp32-c3-devkitm-1',
+  esp32c3supermini: 'esp32-c3-devkitm-1',
+  esp32s3box: 'esp32s3box',
+  lolins3mini: 'lolin_s3_mini',
+  lolin32: 'lolin32',
+};
 
-// Add Custom Board to platformio.ini
+function normalizeBoardId(raw) {
+  const trimmed = String(raw || '').trim();
+  if (!trimmed) return '';
+  const compact = trimmed.toLowerCase().replace(/[\s_-]+/g, '');
+  if (BOARD_ID_ALIASES[compact]) return BOARD_ID_ALIASES[compact];
+  return trimmed.toLowerCase().replace(/\s+/g, '-');
+}
+
+function inferDriverName(explicitDriver, libs) {
+  const upper = String(explicitDriver || '').trim().toUpperCase();
+  if (['SSD1306', 'SH1106', 'ILI9341', 'ST7789', 'U8G2_CUSTOM'].includes(upper)) return upper;
+  const joined = libs.join(' ').toLowerCase();
+  if (joined.includes('st7789')) return 'ST7789';
+  if (joined.includes('ili9341') || joined.includes('tft_espi')) return 'ILI9341';
+  if (joined.includes('sh1106')) return 'SH1106';
+  return 'SSD1306';
+}
+
+// Add Custom Board to platformio.ini (supports both Custom Board Builder and Firmware Editor modal)
 app.post('/api/boards/add', express.json(), (req, res) => {
-  const { envName, boardId, libDeps, buildFlags } = req.body;
-  if (!envName || !boardId) {
-    return res.status(400).json({ error: 'Missing envName or boardId' });
+  const { library, pins, driver, width, height } = req.body || {};
+  const boardId = normalizeBoardId(req.body?.boardId);
+  if (!boardId) {
+    return res.status(400).json({ error: 'Missing boardId' });
+  }
+
+  let envName = req.body?.envName ? String(req.body.envName).trim() : '';
+  if (!envName) {
+    const rawSuffix = req.body?.name || library || boardId;
+    const suffix = String(rawSuffix).replace(/[^a-zA-Z0-9_-]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+    envName = `custom-${suffix || boardId}`;
+  } else {
+    envName = envName.replace(/[^a-zA-Z0-9_-]/g, '_').replace(/_+/g, '_');
+    if (!envName.startsWith('custom-')) envName = `custom-${envName}`;
+  }
+
+  let libs = [];
+  if (Array.isArray(req.body?.libDeps)) {
+    libs = req.body.libDeps.map((l) => String(l).trim()).filter(Boolean);
+  } else if (typeof req.body?.libDeps === 'string' && req.body.libDeps.trim()) {
+    libs = [req.body.libDeps.trim()];
+  }
+  if (library && String(library).trim() && !libs.includes(String(library).trim())) {
+    libs.push(String(library).trim());
+  }
+
+  let flags = Array.isArray(req.body?.buildFlags)
+    ? req.body.buildFlags.map((f) => String(f).trim()).filter(Boolean)
+    : [];
+
+  const resolvedDriver = inferDriverName(driver, libs);
+  const isSpi = resolvedDriver === 'ST7789' || resolvedDriver === 'ILI9341';
+
+  // Ensure main.cpp receives a valid display backend library & driver define
+  if (isSpi) {
+    if (!libs.some((l) => l.toLowerCase().includes('tft_espi'))) {
+      libs.unshift('Bodmer/TFT_eSPI@^2.5.43');
+    }
+  } else if (resolvedDriver !== 'U8G2_CUSTOM') {
+    if (!libs.some((l) => l.toLowerCase().includes('u8g2'))) {
+      libs.unshift('olikraus/U8g2@^2.35.19');
+    }
+  }
+
+  const defaultW = isSpi ? (resolvedDriver === 'ST7789' ? 170 : 320) : 128;
+  const defaultH = isSpi ? (resolvedDriver === 'ST7789' ? 320 : 240) : 64;
+  const wVal = parseInt(width, 10) || defaultW;
+  const hVal = parseInt(height, 10) || defaultH;
+
+  if (!flags.some((f) => f.startsWith('-DDISPLAY_W='))) flags.push(`-DDISPLAY_W=${wVal}`);
+  if (!flags.some((f) => f.startsWith('-DDISPLAY_H='))) flags.push(`-DDISPLAY_H=${hVal}`);
+
+  const hasDriverFlag = flags.some((f) => f.includes('DISPLAY_DRIVER_'));
+  if (!hasDriverFlag) {
+    if (isSpi) {
+      flags.push('-DDISPLAY_DRIVER_TFT=1');
+      flags.push('-DUSER_SETUP_LOADED=1');
+      flags.push(`-D${resolvedDriver}_DRIVER=1`);
+      if (pins?.sda) flags.push(`-DTFT_MOSI=${String(pins.sda).trim()}`);
+      if (pins?.scl) flags.push(`-DTFT_SCLK=${String(pins.scl).trim()}`);
+      if (pins?.cs)  flags.push(`-DTFT_CS=${String(pins.cs).trim()}`);
+      if (pins?.dc)  flags.push(`-DTFT_DC=${String(pins.dc).trim()}`);
+      if (pins?.rst) flags.push(`-DTFT_RST=${String(pins.rst).trim()}`);
+      if (pins?.bl)  flags.push(`-DTFT_BL=${String(pins.bl).trim()}`);
+      if (boardId.includes('esp32')) {
+        flags.push('-DUSE_HSPI_PORT=1');
+        flags.push('-DSPI_FREQUENCY=40000000');
+      }
+    } else {
+      flags.push(`-DDISPLAY_DRIVER_${resolvedDriver}=1`);
+      if (pins?.sda) flags.push(`-DI2C_SDA=${String(pins.sda).trim()}`);
+      if (pins?.scl) flags.push(`-DI2C_SCL=${String(pins.scl).trim()}`);
+    }
   }
 
   const pioIniPath = path.join(__dirname, '..', 'firmware', 'platformio.ini');
   let config = '';
-  try { config = fs.readFileSync(pioIniPath, 'utf8'); } catch(e) {}
-  
+  try { config = fs.readFileSync(pioIniPath, 'utf8'); } catch (_) {}
+
+  // Replace existing custom block cleanly if re-adding the same envName
   if (config.includes(`[env:${envName}]`)) {
-    return res.status(400).json({ error: `Environment [env:${envName}] already exists in platformio.ini` });
+    const escaped = envName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    config = config.replace(
+      new RegExp(`(?:\\r?\\n)*(?:;[^\\r\\n]*\\r?\\n)*\\[env:${escaped}\\][\\s\\S]*?(?=\\r?\\n\\[|$)`, 'g'),
+      ''
+    );
   }
 
   let newEnv = `\n\n; ── Custom Board: ${envName.replace('custom-', '')} ──\n[env:${envName}]\nboard = ${boardId}\n`;
-  if (libDeps) {
+  if (libs.length > 0) {
     newEnv += `lib_deps =\n`;
-    const libs = Array.isArray(libDeps) ? libDeps : [libDeps];
-    libs.forEach(l => newEnv += `    ${l}\n`);
+    Array.from(new Set(libs)).forEach((l) => { newEnv += `    ${l}\n`; });
   }
-  if (buildFlags && buildFlags.length > 0) {
+  if (flags.length > 0) {
     newEnv += `build_flags =\n`;
-    buildFlags.forEach(f => newEnv += `    ${f}\n`);
+    Array.from(new Set(flags)).forEach((f) => { newEnv += `    ${f}\n`; });
   }
-  
+
   try {
-    fs.appendFileSync(pioIniPath, newEnv);
+    fs.writeFileSync(pioIniPath, config.trimEnd() + newEnv, 'utf8');
     queuePrecompile(envName);
-    res.json({ success: true, envName });
+    res.json({ success: true, envName, boardId });
   } catch (err) {
     res.status(500).json({ error: 'Failed to write to platformio.ini: ' + err.message });
   }
@@ -133,14 +271,14 @@ app.post('/api/boards/remove', express.json(), (req, res) => {
     return res.status(404).json({ error: `Environment [env:${envName}] not found` });
   }
 
-  // Remove everything from the env section header to the next env section (or EOF)
+  const escaped = envName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const cleanedConfig = config.replace(
-    new RegExp(`\\n*;[^\\n]*\\n\\[env:${envName.replace('-', '\\-')}\\][\\s\\S]*?(?=\\n\\[|$)`, 'g'),
+    new RegExp(`(?:\\r?\\n)*(?:;[^\\r\\n]*\\r?\\n)*\\[env:${escaped}\\][\\s\\S]*?(?=\\r?\\n\\[|$)`, 'g'),
     ''
   );
 
   try {
-    fs.writeFileSync(pioIniPath, cleanedConfig, 'utf8');
+    fs.writeFileSync(pioIniPath, cleanedConfig.trimEnd() + '\n', 'utf8');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Failed to write platformio.ini: ' + err.message });
@@ -152,12 +290,14 @@ app.use((err, req, res, next) => {
   res.status(400).json({ error: err.message || 'Error' });
 });
 
-const PORT = 4005;
+const PORT = parseInt(process.env.PORT || '4005', 10);
 const HOST = 'localhost';
 
 const server = app.listen(PORT, HOST, () => {
   console.log(`Bad Apple Studio: http://${HOST}:${PORT}`);
-  queueAllEnvironments();
+  // Warm health cache asynchronously & defer background compiles so the GUI opens first
+  setTimeout(() => { void refreshHealthCache(); }, 50).unref();
+  setTimeout(() => queueAllEnvironments(), 5000).unref();
 });
 
 server.on('error', (err) => {

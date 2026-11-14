@@ -1,7 +1,9 @@
 const { app, BrowserWindow, dialog, shell } = require('electron');
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const http = require('http');
-const { execSync, spawn } = require('child_process');
+const { execSync, exec, spawn } = require('child_process');
 
 // Enable Web Bluetooth
 app.commandLine.appendSwitch('enable-web-bluetooth', true);
@@ -45,6 +47,7 @@ function refreshPath() {
 const REQUIRED_DEPS = [
   {
     name: 'Python',
+    checkCmd: 'python --version',
     check: () => { execSync('python --version', { stdio: 'pipe', windowsHide: true }); },
     description: 'Required by PlatformIO to compile ESP32 firmware.',
     installCmd: ['winget', ['install', '--id', 'Python.Python.3.12', '-e', '--source', 'winget', '--accept-package-agreements', '--accept-source-agreements']],
@@ -53,6 +56,7 @@ const REQUIRED_DEPS = [
   },
   {
     name: 'FFmpeg',
+    checkCmd: 'ffmpeg -version',
     check: () => { execSync('ffmpeg -version', { stdio: 'pipe', windowsHide: true }); },
     description: 'Required to process and convert video files.',
     installCmd: ['winget', ['install', '--id', 'Gyan.FFmpeg', '-e', '--source', 'winget', '--accept-package-agreements', '--accept-source-agreements']],
@@ -61,6 +65,7 @@ const REQUIRED_DEPS = [
   },
   {
     name: 'Git',
+    checkCmd: 'git --version',
     check: () => { execSync('git --version', { stdio: 'pipe', windowsHide: true }); },
     description: 'Used by PlatformIO to download some board toolchains.\n(Optional but strongly recommended)',
     installCmd: ['winget', ['install', '--id', 'Git.Git', '-e', '--source', 'winget', '--accept-package-agreements', '--accept-source-agreements']],
@@ -70,6 +75,7 @@ const REQUIRED_DEPS = [
   },
   {
     name: 'PlatformIO CLI',
+    checkCmd: 'pio --version',
     check: () => { execSync('pio --version', { stdio: 'pipe', windowsHide: true }); },
     description: 'Required to compile ESP32 firmware.',
     installCmd: ['pip', ['install', 'platformio', '--break-system-packages']],
@@ -80,6 +86,12 @@ const REQUIRED_DEPS = [
 
 function checkDep(dep) {
   try { dep.check(); return true; } catch (_) { return false; }
+}
+
+function checkDepAsync(dep) {
+  return new Promise((resolve) => {
+    exec(dep.checkCmd, { windowsHide: true, timeout: 4000 }, (err) => resolve(!err));
+  });
 }
 
 async function installDep(dep) {
@@ -103,12 +115,15 @@ async function installDep(dep) {
  * offline for the first real compile.
  */
 async function ensureESP32Toolchain() {
-  try {
-    // Quick check: if `pio pkg list -g -p espressif32` succeeds there's
-    // at least one version installed globally.
-    execSync('pio pkg list -g -p espressif32', { stdio: 'pipe', windowsHide: true });
-    return; // already installed
-  } catch (_) { /* not installed — continue */ }
+  const pioCore = process.env.PLATFORMIO_CORE_DIR || path.join(os.homedir(), '.platformio');
+  if (fs.existsSync(path.join(pioCore, 'platforms', 'espressif32'))) {
+    return; // Fast disk check avoids booting Python/PIO on every launch
+  }
+
+  const hasPlatform = await new Promise((resolve) => {
+    exec('pio pkg list -g -p espressif32', { windowsHide: true, timeout: 6000 }, (err) => resolve(!err));
+  });
+  if (hasPlatform) return;
 
   return new Promise((resolve) => {
     const proc = spawn('pio', ['pkg', 'install', '-g', '-p', 'espressif32'], {
@@ -124,7 +139,8 @@ async function ensureESP32Toolchain() {
 }
 
 async function detectAndInstallDeps() {
-  const missing = REQUIRED_DEPS.filter(d => !checkDep(d));
+  const results = await Promise.all(REQUIRED_DEPS.map(d => checkDepAsync(d)));
+  const missing = REQUIRED_DEPS.filter((_, idx) => !results[idx]);
   if (missing.length === 0) {
     // Even if nothing is missing, still ensure ESP32 toolchain
     await ensureESP32Toolchain();
@@ -210,10 +226,11 @@ function startBackend() {
       console.log('Starting backend server directly within Electron main process...');
       backendServer = require('./backend/server.js').server;
 
-      // Wait for the backend to be healthy
+      // Wait for the backend to be responsive via lightweight /api/ping
       let retries = 0;
-      const checkHealth = () => {
-        http.get('http://localhost:4005/api/health', (res) => {
+      const checkPing = () => {
+        http.get('http://localhost:4005/api/ping', (res) => {
+          res.resume();
           if (res.statusCode === 200) {
             console.log('Backend is ready!');
             resolve();
@@ -225,14 +242,14 @@ function startBackend() {
 
       const retry = () => {
         retries++;
-        if (retries > 30) {
+        if (retries > 120) {
           reject(new Error('Backend server did not start in time.'));
         } else {
-          setTimeout(checkHealth, 500);
+          setTimeout(checkPing, 50);
         }
       };
 
-      checkHealth();
+      checkPing();
     } catch (err) {
       reject(err);
     }
@@ -404,13 +421,14 @@ const { ipcMain } = require('electron');
 app.whenReady().then(async () => {
   try {
     useBundledTools();
-    // Refresh PATH first so we can detect tools that were installed in
-    // a previous session but whose PATH wasn't visible to this process.
-    refreshPath();
-
-    await detectAndInstallDeps();
     await startBackend();
     createWindow();
+
+    // Run registry PATH lookup and dependency checks after window appears
+    setTimeout(() => {
+      refreshPath();
+      void detectAndInstallDeps();
+    }, 300);
   } catch (err) {
     dialog.showErrorBox('Startup Error', `Failed to start backend server:\n${err.message}`);
     app.quit();
