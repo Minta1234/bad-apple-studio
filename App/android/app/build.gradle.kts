@@ -11,8 +11,8 @@ android {
         applicationId = "com.rzeldent.badapplestudio"
         minSdk = 24
         targetSdk = 36
-        versionCode = 19
-        versionName = "4.8.2"
+        versionCode = 20
+        versionName = "4.8.3"
     }
 
     signingConfigs {
