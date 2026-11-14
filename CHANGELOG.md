@@ -20,6 +20,14 @@
 
 
 
+
+## v4.9.2
+
+### 🐛 Bug Fixes & Stability
+- show live download and install progress on PC and Android (b0cc3b5)
+
+---
+
 ## v4.9.1
 
 ### 🐛 Bug Fixes & Stability
