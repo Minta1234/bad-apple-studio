@@ -19,6 +19,14 @@
 
 
 
+
+## v4.9.1
+
+### 🐛 Bug Fixes & Stability
+- serialize Bluetooth uploads and verify board acknowledgements (5fc7703)
+
+---
+
 ## v4.9.0
 
 ### 🚀 New Features
