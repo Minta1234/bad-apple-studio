@@ -18,6 +18,14 @@
 
 
 
+
+## v4.9.0
+
+### 🚀 New Features
+- add in-app updater for PC and polish Android update UI (a947e68)
+
+---
+
 ## v4.8.3
 
 ### 🔧 Maintenance & Enhancements
