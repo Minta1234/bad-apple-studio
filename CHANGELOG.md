@@ -13,6 +13,17 @@
 
 
 
+
+## v4.7.0
+
+### 🚀 New Features
+- add ESP32 web installer scripts and dependencies (b0d6296)
+
+### ⚡ Performance Improvements
+- non-blocking launch and fix custom board setup (b2618ba)
+
+---
+
 ## v4.6.1
 
 ### 🐛 Bug Fixes & Stability
