@@ -16,6 +16,14 @@
 
 
 
+
+## v4.8.2
+
+### 🔧 Maintenance & Enhancements
+- load signing keystore from GitHub Secrets and ignore keystores (db73a48)
+
+---
+
 ## v4.8.1
 
 ### 🐛 Bug Fixes & Stability
