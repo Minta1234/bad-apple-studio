@@ -10,6 +10,7 @@ const cors = require('cors');
 const jobsRouter    = require('./src/routes/convert');
 const firmwareRouter = require('./src/routes/firmware');
 const { queuePrecompile, queueAllEnvironments, getCompileStatus } = require('./src/lib/compileQueue');
+const { refreshPath } = require('./src/lib/refreshPath');
 
 const app = express();
 
@@ -28,12 +29,15 @@ let healthRefreshing = null;
 
 function checkCmdAsync(cmd) {
   return new Promise((resolve) => {
-    exec(cmd, { windowsHide: true, timeout: 4000 }, (err) => resolve(!err));
+    exec(cmd, { windowsHide: true, timeout: 8000 }, (err) => resolve(!err));
   });
 }
 
 async function refreshHealthCache() {
   if (healthRefreshing) return healthRefreshing;
+  if (!healthCache || !healthCache.ffmpeg || !healthCache.pio) {
+    try { refreshPath(); } catch (_) {}
+  }
   healthRefreshing = Promise.all([
     checkCmdAsync('ffmpeg -version'),
     checkCmdAsync('pio --version'),
@@ -49,7 +53,7 @@ async function refreshHealthCache() {
 
 // Health check — returns cached async checks immediately without blocking the event loop
 app.get('/api/health', async (req, res) => {
-  if (healthCache) {
+  if (healthCache && ((healthCache.ffmpeg && healthCache.pio) || Date.now() - healthCache.ts < 2000)) {
     res.json(healthCache);
     if (Date.now() - healthCache.ts > 30000) {
       void refreshHealthCache();

@@ -912,7 +912,12 @@
     }
 
     // ── Health Check ───────────────────────────────────────
-    async function checkHealth() {
+    let healthRetryTimer = null;
+    async function checkHealth(retryCount = 0) {
+      if (healthRetryTimer) {
+        clearTimeout(healthRetryTimer);
+        healthRetryTimer = null;
+      }
       try {
         const res = await fetch('/api/health');
         const h = await res.json();
@@ -927,8 +932,12 @@
         ${missing.map(m => `<a href="${m.url}" target="_blank" class="ms-2 fw-bold">${m.name}</a>`).join('')}
         <br><small class="text-muted">Install them and restart the server. Video conversion and firmware build will fail without them.</small>`;
           submitBtn.disabled = true;
+          if (retryCount < 5) {
+            healthRetryTimer = setTimeout(() => checkHealth(retryCount + 1), 2500);
+          }
         } else {
           healthBanner.style.display = 'none';
+          submitBtn.disabled = false;
         }
       } catch (_) { }
     }

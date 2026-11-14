@@ -90,7 +90,7 @@ function checkDep(dep) {
 
 function checkDepAsync(dep) {
   return new Promise((resolve) => {
-    exec(dep.checkCmd, { windowsHide: true, timeout: 4000 }, (err) => resolve(!err));
+    exec(dep.checkCmd, { windowsHide: true, timeout: 8000 }, (err) => resolve(!err));
   });
 }
 
@@ -421,12 +421,12 @@ const { ipcMain } = require('electron');
 app.whenReady().then(async () => {
   try {
     useBundledTools();
+    refreshPath();
     await startBackend();
     createWindow();
 
-    // Run registry PATH lookup and dependency checks after window appears
+    // Run dependency installation checks after window appears
     setTimeout(() => {
-      refreshPath();
       void detectAndInstallDeps();
     }, 300);
   } catch (err) {
