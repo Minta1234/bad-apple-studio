@@ -90,7 +90,22 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x App/android/gradlew
 
+      - name: Decode Android signing keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            printf '%s' "$KEYSTORE_B64" | tr -d '\r\n ' | base64 -d > App/android/app/badapple-signing.keystore
+            echo "Decoded signing keystore from GitHub Secrets."
+          else
+            echo "No ANDROID_KEYSTORE_BASE64 secret configured; using default debug keystore."
+          fi
+
       - name: Compile Android Project
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           cd App/android
           for attempt in 1 2 3; do
@@ -246,7 +261,22 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x App/android/gradlew
 
+      - name: Decode Android signing keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            printf '%s' "$KEYSTORE_B64" | tr -d '\r\n ' | base64 -d > App/android/app/badapple-signing.keystore
+            echo "Decoded signing keystore from GitHub Secrets."
+          else
+            echo "No ANDROID_KEYSTORE_BASE64 secret configured; using default debug keystore."
+          fi
+
       - name: Build Android Release APK
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           cd App/android
           for attempt in 1 2 3; do

@@ -17,10 +17,13 @@ android {
 
     signingConfigs {
         getByName("debug") {
-            storeFile = file("badapple-signing.keystore")
-            storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: "android"
-            keyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: "androiddebugkey"
-            keyPassword = System.getenv("ANDROID_KEY_PASSWORD") ?: "android"
+            val ksFile = file(System.getenv("ANDROID_KEYSTORE_PATH")?.ifEmpty { null } ?: "badapple-signing.keystore")
+            if (ksFile.exists()) {
+                storeFile = ksFile
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")?.ifEmpty { null } ?: "android"
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS")?.ifEmpty { null } ?: "androiddebugkey"
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")?.ifEmpty { null } ?: "android"
+            }
         }
     }
 
