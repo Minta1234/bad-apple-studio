@@ -149,6 +149,7 @@ class MainActivity : ComponentActivity() {
                         AnimatedVisibility(visible = availableUpdate != null) {
                             availableUpdate?.let { release ->
                                 UpdateCard(
+                                    currentVersion = AppUpdater.getCurrentVersion(this@MainActivity),
                                     release = release,
                                     isDownloading = isDownloadingUpdate,
                                     progress = updateProgress,
@@ -993,6 +994,7 @@ fun UploadCard(
 
 @Composable
 fun UpdateCard(
+    currentVersion: String,
     release: ReleaseInfo,
     isDownloading: Boolean,
     progress: Float,
@@ -1015,7 +1017,7 @@ fun UpdateCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "NEW UPDATE: v${release.version}",
+                    text = "NEW UPDATE: v$currentVersion → v${release.version}",
                     style = MaterialTheme.typography.titleSmall,
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,

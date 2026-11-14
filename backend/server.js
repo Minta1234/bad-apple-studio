@@ -2,8 +2,9 @@
 
 const express = require('express');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
-const { exec } = require('child_process');
+const { exec, spawn } = require('child_process');
 const https = require('https');
 const cors = require('cors');
 
@@ -286,6 +287,321 @@ app.post('/api/boards/remove', express.json(), (req, res) => {
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Failed to write platformio.ini: ' + err.message });
+  }
+});
+
+// ── PC App Auto-Updater (GitHub Releases) ─────────────────────────────────────
+const GITHUB_LATEST_RELEASE_API =
+  'https://api.github.com/repos/Minta1234/bad-apple-studio/releases/latest';
+
+const updateState = {
+  state: 'idle', // 'idle' | 'downloading' | 'launching' | 'error'
+  progress: 0,
+  downloadedMb: 0,
+  totalMb: 0,
+  version: '',
+  error: null,
+};
+
+function getCurrentAppVersion() {
+  try {
+    const pkgPath = path.join(__dirname, '..', 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    return String(pkg.version || '0.0.0').replace(/^(release)?v/i, '');
+  } catch (_) {
+    return '0.0.0';
+  }
+}
+
+function parseVersionParts(versionStr) {
+  const clean = String(versionStr || '')
+    .trim()
+    .replace(/^(release)?v/i, '')
+    .split('-')[0];
+  return clean.split('.').map((p) => {
+    const n = parseInt(p, 10);
+    return Number.isFinite(n) ? n : 0;
+  });
+}
+
+function isNewerVersion(current, latest) {
+  const cur = parseVersionParts(current);
+  const lat = parseVersionParts(latest);
+  const count = Math.max(cur.length, lat.length);
+  for (let i = 0; i < count; i++) {
+    const c = cur[i] || 0;
+    const l = lat[i] || 0;
+    if (l > c) return true;
+    if (l < c) return false;
+  }
+  return false;
+}
+
+function isTrustedGithubUrl(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    if (u.protocol !== 'https:') return false;
+    const host = u.hostname.toLowerCase();
+    return (
+      host === 'github.com' ||
+      host === 'api.github.com' ||
+      host.endsWith('.githubusercontent.com')
+    );
+  } catch (_) {
+    return false;
+  }
+}
+
+function fetchJsonWithRedirect(targetUrl, redirectsLeft = 5) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(
+      targetUrl,
+      {
+        headers: {
+          'User-Agent': 'BadAppleStudio-PC',
+          'Accept': 'application/vnd.github+json',
+        },
+        timeout: 15000,
+      },
+      (res) => {
+        const code = res.statusCode || 0;
+        if (code >= 300 && code < 400 && res.headers.location) {
+          res.resume();
+          if (redirectsLeft <= 0) {
+            reject(new Error('Too many redirects'));
+            return;
+          }
+          const nextUrl = new URL(res.headers.location, targetUrl).toString();
+          resolve(fetchJsonWithRedirect(nextUrl, redirectsLeft - 1));
+          return;
+        }
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => { body += chunk; });
+        res.on('end', () => {
+          if (code < 200 || code >= 300) {
+            reject(new Error(`GitHub API HTTP ${code}: ${body.slice(0, 200)}`));
+            return;
+          }
+          try {
+            resolve(JSON.parse(body));
+          } catch (err) {
+            reject(new Error('Invalid JSON from GitHub API: ' + err.message));
+          }
+        });
+      }
+    );
+    req.on('timeout', () => {
+      req.destroy(new Error('GitHub request timed out'));
+    });
+    req.on('error', reject);
+  });
+}
+
+function downloadFileWithProgress(targetUrl, destPath, onProgress, redirectsLeft = 5) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(
+      targetUrl,
+      {
+        headers: { 'User-Agent': 'BadAppleStudio-PC' },
+        timeout: 30000,
+      },
+      (res) => {
+        const code = res.statusCode || 0;
+        if (code >= 300 && code < 400 && res.headers.location) {
+          res.resume();
+          if (redirectsLeft <= 0) {
+            reject(new Error('Too many redirects while downloading update'));
+            return;
+          }
+          const nextUrl = new URL(res.headers.location, targetUrl).toString();
+          resolve(downloadFileWithProgress(nextUrl, destPath, onProgress, redirectsLeft - 1));
+          return;
+        }
+        if (code < 200 || code >= 300) {
+          res.resume();
+          reject(new Error(`Download failed: HTTP ${code}`));
+          return;
+        }
+
+        const totalBytes = parseInt(res.headers['content-length'] || '0', 10) || 0;
+        let downloadedBytes = 0;
+        const partPath = `${destPath}.part`;
+        const fileStream = fs.createWriteStream(partPath);
+
+        res.on('data', (chunk) => {
+          downloadedBytes += chunk.length;
+          if (typeof onProgress === 'function') {
+            onProgress(downloadedBytes, totalBytes);
+          }
+        });
+
+        fileStream.on('finish', () => {
+          fileStream.close(() => {
+            try {
+              if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+              fs.renameSync(partPath, destPath);
+              resolve(destPath);
+            } catch (err) {
+              reject(err);
+            }
+          });
+        });
+
+        const cleanupOnError = (err) => {
+          try { fileStream.destroy(); } catch (_) {}
+          try { if (fs.existsSync(partPath)) fs.unlinkSync(partPath); } catch (_) {}
+          reject(err);
+        };
+
+        res.on('error', cleanupOnError);
+        fileStream.on('error', cleanupOnError);
+        res.pipe(fileStream);
+      }
+    );
+    req.on('timeout', () => {
+      req.destroy(new Error('Download timed out'));
+    });
+    req.on('error', reject);
+  });
+}
+
+async function fetchLatestReleaseInfo() {
+  const currentVersion = getCurrentAppVersion();
+  const release = await fetchJsonWithRedirect(GITHUB_LATEST_RELEASE_API);
+  const tagName = String(release.tag_name || '').trim();
+  const latestVersion = tagName.replace(/^(release)?v/i, '');
+  const assets = Array.isArray(release.assets) ? release.assets : [];
+
+  const exeAssets = assets.filter((a) => {
+    const name = String(a.name || '').toLowerCase();
+    return name.endsWith('.exe') && !name.endsWith('.blockmap');
+  });
+  const installerAsset =
+    exeAssets.find((a) => String(a.name || '').toLowerCase().includes('setup')) ||
+    exeAssets[0] ||
+    null;
+  const zipAsset =
+    assets.find((a) => String(a.name || '').toLowerCase().endsWith('.zip')) || null;
+  const apkAsset =
+    assets.find((a) => String(a.name || '').toLowerCase().endsWith('.apk')) || null;
+
+  return {
+    currentVersion,
+    latestVersion,
+    tagName,
+    updateAvailable: latestVersion ? isNewerVersion(currentVersion, latestVersion) : false,
+    releaseNotes: String(release.body || '').trim(),
+    releaseUrl: String(release.html_url || 'https://github.com/Minta1234/bad-apple-studio/releases/latest'),
+    installerUrl: installerAsset ? installerAsset.browser_download_url : null,
+    installerName: installerAsset ? installerAsset.name : null,
+    installerSize: installerAsset ? installerAsset.size : 0,
+    zipUrl: zipAsset ? zipAsset.browser_download_url : null,
+    apkUrl: apkAsset ? apkAsset.browser_download_url : null,
+    platform: process.platform,
+    canAutoInstall: process.platform === 'win32' && Boolean(installerAsset && installerAsset.browser_download_url),
+  };
+}
+
+app.get('/api/update/check', async (req, res) => {
+  try {
+    const info = await fetchLatestReleaseInfo();
+    res.json(info);
+  } catch (err) {
+    res.status(502).json({
+      currentVersion: getCurrentAppVersion(),
+      updateAvailable: false,
+      error: err.message || 'Failed to check for updates',
+    });
+  }
+});
+
+app.get('/api/update/status', (req, res) => {
+  res.json(updateState);
+});
+
+app.post('/api/update/install', express.json(), async (req, res) => {
+  if (process.platform !== 'win32') {
+    return res.status(400).json({
+      error: 'Auto-install is only supported on Windows. Please download the update from the release page.',
+    });
+  }
+
+  if (updateState.state === 'downloading' || updateState.state === 'launching') {
+    return res.json({ started: true, ...updateState });
+  }
+
+  try {
+    let installerUrl = req.body && req.body.installerUrl ? String(req.body.installerUrl) : '';
+    let installerName = req.body && req.body.installerName ? String(req.body.installerName) : '';
+    let version = req.body && req.body.version ? String(req.body.version) : '';
+
+    if (!installerUrl) {
+      const latest = await fetchLatestReleaseInfo();
+      if (!latest.installerUrl) {
+        return res.status(404).json({ error: 'No Windows installer (.exe) found in latest GitHub release.' });
+      }
+      installerUrl = latest.installerUrl;
+      installerName = latest.installerName || '';
+      version = latest.latestVersion || version;
+    }
+
+    if (!isTrustedGithubUrl(installerUrl)) {
+      return res.status(400).json({ error: 'Untrusted installer URL' });
+    }
+
+    const safeFileName =
+      installerName && /^[a-zA-Z0-9._-]+\.exe$/i.test(installerName)
+        ? installerName
+        : 'BadAppleStudio-Setup-Update.exe';
+    const destPath = path.join(os.tmpdir(), safeFileName);
+
+    updateState.state = 'downloading';
+    updateState.progress = 0;
+    updateState.downloadedMb = 0;
+    updateState.totalMb = 0;
+    updateState.version = version;
+    updateState.error = null;
+
+    res.json({ started: true, ...updateState });
+
+    downloadFileWithProgress(installerUrl, destPath, (downloaded, total) => {
+      updateState.downloadedMb = Number((downloaded / (1024 * 1024)).toFixed(1));
+      updateState.totalMb = total > 0 ? Number((total / (1024 * 1024)).toFixed(1)) : 0;
+      updateState.progress = total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : 0;
+    })
+      .then((downloadedExe) => {
+        updateState.state = 'launching';
+        updateState.progress = 100;
+        const child = spawn(downloadedExe, [], {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: false,
+        });
+        child.unref();
+
+        // Give the HTTP status poller time to see 'launching', then quit cleanly
+        // so the NSIS installer can overwrite Bad Apple Studio.exe without locks.
+        setTimeout(() => {
+          try {
+            if (process.versions && process.versions.electron) {
+              const { app: electronApp } = require('electron');
+              if (electronApp && typeof electronApp.quit === 'function') {
+                electronApp.quit();
+              }
+            }
+          } catch (_) {}
+          setTimeout(() => process.exit(0), 500).unref();
+        }, 1200).unref();
+      })
+      .catch((err) => {
+        updateState.state = 'error';
+        updateState.error = err.message || 'Download failed';
+      });
+  } catch (err) {
+    updateState.state = 'error';
+    updateState.error = err.message || 'Failed to start update';
+    res.status(500).json({ error: updateState.error });
   }
 });
 

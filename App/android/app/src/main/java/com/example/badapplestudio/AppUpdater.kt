@@ -170,7 +170,7 @@ object AppUpdater {
                 break
             }
 
-            val connection = conn!!
+            val connection = conn
             val totalBytes = connection.contentLengthLong
             var downloadedBytes = 0L
             var lastNotifyMs = 0L
