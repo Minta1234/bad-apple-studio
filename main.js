@@ -94,14 +94,137 @@ function checkDepAsync(dep) {
   });
 }
 
-async function installDep(dep) {
-  const [cmd, args] = dep.installCmd;
+function stripAnsiAndControl(str) {
+  return String(str || '')
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
+}
+
+function parseProgressOutput(chunk, lastPercent = -1) {
+  const cleaned = stripAnsiAndControl(chunk);
+  const lines = cleaned
+    .split(/[\r\n]+/)
+    .map((l) => l.trim())
+    .filter((l) => l && !/^[-\\|/─█▒░\s]+$/.test(l));
+  let percent = lastPercent;
+  let latestLine = lines.length ? lines[lines.length - 1] : '';
+  for (const line of lines) {
+    const m = line.match(/(\d{1,3}(?:\.\d+)?)\s*%/);
+    if (m) {
+      const val = Math.round(parseFloat(m[1]));
+      if (Number.isFinite(val) && val >= 0 && val <= 100) {
+        percent = val;
+      }
+    }
+  }
+  return { percent, line: latestLine.slice(0, 120) };
+}
+
+function createInstallProgressWindow(title, heading, subtitle) {
+  const win = new BrowserWindow({
+    width: 520,
+    height: 190,
+    resizable: false,
+    minimizable: false,
+    alwaysOnTop: true,
+    frame: true,
+    title,
+    webPreferences: { nodeIntegration: false },
+  });
+
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+    body{font-family:'Segoe UI',sans-serif;padding:20px 22px;margin:0;background:#1a1a2e;color:#eee;}
+    .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-size:14px;}
+    .pct{font-weight:700;color:#4fc3f7;font-variant-numeric:tabular-nums;}
+    .track{width:100%;height:12px;background:rgba(255,255,255,0.12);border-radius:6px;overflow:hidden;}
+    .bar{height:100%;width:100%;background:linear-gradient(90deg,#0288d1,#2dbbeb);border-radius:6px;transition:width .25s ease;}
+    .bar.indeterminate{width:40%;animation:indet 1.3s infinite ease-in-out;}
+    @keyframes indet{0%{transform:translateX(-110%);}100%{transform:translateX(260%);}}
+    .sub{font-size:12px;color:#aaa;margin-top:8px;}
+    .log{font-family:Consolas,monospace;font-size:11px;color:#80deea;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:16px;}
+  </style></head><body>
+    <div class="top"><span id="heading">${heading}</span><span id="pct" class="pct">...</span></div>
+    <div class="track"><div id="bar" class="bar indeterminate"></div></div>
+    <div id="sub" class="sub">${subtitle}</div>
+    <div id="log" class="log">Starting...</div>
+  </body></html>`;
+
+  win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.setProgressBar(2); } catch (_) {} // indeterminate taskbar pulse
+  }
+
+  let ready = false;
+  let pending = null;
+  const applyState = (state) => {
+    if (win.isDestroyed()) return;
+    const pct = typeof state.percent === 'number' ? state.percent : -1;
+    const log = state.log || '';
+    const sub = state.subtitle || '';
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try {
+        mainWindow.setProgressBar(pct >= 0 ? Math.min(1, Math.max(0.02, pct / 100)) : 2);
+      } catch (_) {}
+    }
+    win.webContents.executeJavaScript(`(function(){
+      var bar = document.getElementById('bar');
+      var pctEl = document.getElementById('pct');
+      var logEl = document.getElementById('log');
+      var subEl = document.getElementById('sub');
+      var p = ${JSON.stringify(pct)};
+      if (bar) {
+        if (p >= 0) { bar.classList.remove('indeterminate'); bar.style.width = Math.max(3, Math.min(100, p)) + '%'; }
+        else { bar.classList.add('indeterminate'); bar.style.width = '40%'; }
+      }
+      if (pctEl) pctEl.textContent = p >= 0 ? (p + '%') : '...';
+      if (logEl && ${JSON.stringify(Boolean(log))}) logEl.textContent = ${JSON.stringify(log)};
+      if (subEl && ${JSON.stringify(Boolean(sub))}) subEl.textContent = ${JSON.stringify(sub)};
+    })()`).catch(() => {});
+  };
+
+  win.webContents.once('did-finish-load', () => {
+    ready = true;
+    if (pending) {
+      applyState(pending);
+      pending = null;
+    }
+  });
+
+  return {
+    update(state) {
+      if (win.isDestroyed()) return;
+      if (!ready) { pending = state; return; }
+      applyState(state);
+    },
+    close() {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        try { mainWindow.setProgressBar(-1); } catch (_) {}
+      }
+      if (!win.isDestroyed()) win.close();
+    },
+  };
+}
+
+function runProcessWithProgress(cmd, args, onProgress) {
   return new Promise((resolve) => {
     const proc = spawn(cmd, args, {
       shell: true,
       windowsHide: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
     startupProcesses.add(proc);
+    let lastPercent = -1;
+    const handleChunk = (buf) => {
+      if (typeof onProgress !== 'function') return;
+      const parsed = parseProgressOutput(buf.toString('utf8'), lastPercent);
+      lastPercent = parsed.percent;
+      if (parsed.line || parsed.percent >= 0) {
+        onProgress({ percent: parsed.percent, log: parsed.line });
+      }
+    };
+    if (proc.stdout) proc.stdout.on('data', handleChunk);
+    if (proc.stderr) proc.stderr.on('data', handleChunk);
     proc.once('close', () => startupProcesses.delete(proc));
     proc.once('error', () => startupProcesses.delete(proc));
     proc.on('close', (code) => resolve(code === 0));
@@ -109,12 +232,17 @@ async function installDep(dep) {
   });
 }
 
+async function installDep(dep, onProgress) {
+  const [cmd, args] = dep.installCmd;
+  return runProcessWithProgress(cmd, args, onProgress);
+}
+
 /**
  * After PlatformIO CLI is installed, make sure the ESP32 platform
  * (toolchain, framework, etc.) is also installed so `pio run` works
  * offline for the first real compile.
  */
-async function ensureESP32Toolchain() {
+async function ensureESP32Toolchain(onProgress) {
   const pioCore = process.env.PLATFORMIO_CORE_DIR || path.join(os.homedir(), '.platformio');
   if (fs.existsSync(path.join(pioCore, 'platforms', 'espressif32'))) {
     return; // Fast disk check avoids booting Python/PIO on every launch
@@ -125,17 +253,7 @@ async function ensureESP32Toolchain() {
   });
   if (hasPlatform) return;
 
-  return new Promise((resolve) => {
-    const proc = spawn('pio', ['pkg', 'install', '-g', '-p', 'espressif32'], {
-      shell: true,
-      windowsHide: false,
-    });
-    startupProcesses.add(proc);
-    proc.once('close', () => startupProcesses.delete(proc));
-    proc.once('error', () => startupProcesses.delete(proc));
-    proc.on('close', () => resolve());
-    proc.on('error', () => resolve());
-  });
+  await runProcessWithProgress('pio', ['pkg', 'install', '-g', '-p', 'espressif32'], onProgress);
 }
 
 async function detectAndInstallDeps() {
@@ -163,22 +281,19 @@ async function detectAndInstallDeps() {
     });
 
     if (response === 0) {
-      // Auto-install
-      const progressBox = new BrowserWindow({
-        width: 520, height: 140,
-        resizable: false, minimizable: false,
-        alwaysOnTop: true, frame: true,
-        title: `Installing ${dep.name}...`,
-        webPreferences: { nodeIntegration: false },
-      });
-      progressBox.loadURL(`data:text/html,<body style="font-family:'Segoe UI',sans-serif;padding:24px;background:#1a1a2e;color:#eee"><p style="font-size:15px">Installing <b>${dep.name}</b>… Please wait.</p><p style="font-size:13px;color:#888">A terminal window may appear. Do not close it.</p></body>`);
+      // Auto-install with live progress bar window
+      const progressUi = createInstallProgressWindow(
+        `Installing ${dep.name}...`,
+        `Installing <b>${dep.name}</b>… Please wait.`,
+        'Downloading and installing automatically. Do not close the app.'
+      );
 
-      const success = await installDep(dep);
+      const success = await installDep(dep, (state) => progressUi.update(state));
 
       // Refresh PATH so the newly installed binary is visible
       if (dep.needsPathRefresh) refreshPath();
 
-      progressBox.close();
+      progressUi.close();
 
       if (success && checkDep(dep)) {
         await dialog.showMessageBox({
@@ -205,17 +320,20 @@ async function detectAndInstallDeps() {
 
   // After all deps are resolved, ensure ESP32 toolchain is present
   if (checkDep(REQUIRED_DEPS.find(d => d.name === 'PlatformIO CLI'))) {
-    const toolchainBox = new BrowserWindow({
-      width: 520, height: 140,
-      resizable: false, minimizable: false,
-      alwaysOnTop: true, frame: true,
-      title: 'Preparing ESP32 toolchain...',
-      webPreferences: { nodeIntegration: false },
-    });
-    toolchainBox.loadURL(`data:text/html,<body style="font-family:'Segoe UI',sans-serif;padding:24px;background:#1a1a2e;color:#eee"><p style="font-size:15px">Downloading <b>ESP32 toolchain</b>… This may take a few minutes on first run.</p><p style="font-size:13px;color:#888">Please wait.</p></body>`);
+    const pioCore = process.env.PLATFORMIO_CORE_DIR || path.join(os.homedir(), '.platformio');
+    const needsToolchainPopup = !fs.existsSync(path.join(pioCore, 'platforms', 'espressif32'));
+    const toolchainUi = needsToolchainPopup
+      ? createInstallProgressWindow(
+          'Preparing ESP32 toolchain...',
+          'Downloading <b>ESP32 toolchain</b>…',
+          'This may take a few minutes on first run. Please wait.'
+        )
+      : null;
 
-    await ensureESP32Toolchain();
-    toolchainBox.close();
+    await ensureESP32Toolchain((state) => {
+      if (toolchainUi) toolchainUi.update(state);
+    });
+    if (toolchainUi) toolchainUi.close();
   }
 }
 

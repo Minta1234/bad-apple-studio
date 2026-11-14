@@ -364,9 +364,19 @@
         <button id="installUpdateBtn" type="button" class="btn btn-sm fw-semibold" style="background: #0288d1; color: #fff; border-radius: 8px;" onclick="installAppUpdate()">⬇ Update &amp; Restart Now</button>
         <a id="releasePageLink" href="https://github.com/Minta1234/bad-apple-studio/releases/latest" target="_blank" class="btn btn-sm btn-outline-secondary" style="border-radius: 8px; font-size: 0.8rem;">🌐 Release Page</a>
       </div>
-      <div id="updateProgressWrap" class="mt-2" style="display:none;">
-        <div class="progress" style="height: 8px; border-radius: 4px; background: rgba(2, 136, 209, 0.15);">
-          <div id="updateProgressBar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%; background: #0288d1;"></div>
+      <div id="updateProgressWrap" class="mt-3" style="display:none;">
+        <div class="d-flex justify-content-between align-items-center mb-1" style="font-size: 0.74rem;">
+          <div id="updateSteps" class="d-flex flex-wrap align-items-center gap-1 text-sub">
+            <span id="updateStepDownload" class="fw-bold" style="color: #0277bd;">1. Download</span>
+            <span>→</span>
+            <span id="updateStepLaunch">2. Launch Installer</span>
+            <span>→</span>
+            <span id="updateStepInstall">3. Install &amp; Restart</span>
+          </div>
+          <span id="updateProgressPct" class="fw-bold" style="color: #0277bd;">0%</span>
+        </div>
+        <div class="progress" style="height: 16px; border-radius: 8px; background-color: rgba(2, 136, 209, 0.18);">
+          <div id="updateProgressBar" class="progress-bar progress-bar-striped progress-bar-animated fw-bold" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" style="width: 0%; background-color: #0288d1; font-size: 0.72rem; line-height: 16px;"></div>
         </div>
         <div id="updateProgressText" class="mt-1 fw-medium" style="font-size: 0.78rem; color: #0277bd;">Preparing download...</div>
       </div>
@@ -1705,6 +1715,30 @@
       }
     }
 
+    function setUpdatePhaseUi(phase) {
+      const sDl = document.getElementById('updateStepDownload');
+      const sLa = document.getElementById('updateStepLaunch');
+      const sIn = document.getElementById('updateStepInstall');
+      const resetStyle = (el, color, weight) => {
+        if (!el) return;
+        el.style.color = color;
+        el.style.fontWeight = weight;
+      };
+      if (phase === 'connecting' || phase === 'downloading') {
+        resetStyle(sDl, '#0277bd', '700');
+        resetStyle(sLa, '', '400');
+        resetStyle(sIn, '', '400');
+      } else if (phase === 'launching') {
+        resetStyle(sDl, '#198754', '600');
+        resetStyle(sLa, '#0277bd', '700');
+        resetStyle(sIn, '', '400');
+      } else if (phase === 'installing') {
+        resetStyle(sDl, '#198754', '600');
+        resetStyle(sLa, '#198754', '600');
+        resetStyle(sIn, '#198754', '700');
+      }
+    }
+
     async function installAppUpdate() {
       if (!latestUpdateInfo || !latestUpdateInfo.installerUrl) {
         if (latestUpdateInfo && latestUpdateInfo.releaseUrl) {
@@ -1718,18 +1752,24 @@
       const actionsWrap = document.getElementById('updateActionsWrap');
       const progressWrap = document.getElementById('updateProgressWrap');
       const progressBar = document.getElementById('updateProgressBar');
+      const progressPct = document.getElementById('updateProgressPct');
       const progressText = document.getElementById('updateProgressText');
 
       if (installBtn) installBtn.disabled = true;
       if (dismissBtn) dismissBtn.style.display = 'none';
       if (progressWrap) progressWrap.style.display = 'block';
+      setUpdatePhaseUi('connecting');
       if (progressBar) {
-        progressBar.style.width = '0%';
-        progressBar.style.background = '#0288d1';
+        progressBar.style.width = '100%';
+        progressBar.style.opacity = '0.65';
+        progressBar.style.backgroundColor = '#0288d1';
+        progressBar.textContent = 'Connecting...';
+        progressBar.setAttribute('aria-valuenow', '0');
       }
+      if (progressPct) progressPct.textContent = '0%';
       if (progressText) {
         progressText.style.color = '#0277bd';
-        progressText.textContent = 'Starting update download...';
+        progressText.textContent = 'Connecting to GitHub Releases...';
       }
 
       try {
@@ -1739,6 +1779,7 @@
           body: JSON.stringify({
             installerUrl: latestUpdateInfo.installerUrl,
             installerName: latestUpdateInfo.installerName,
+            installerSize: latestUpdateInfo.installerSize || 0,
             version: latestUpdateInfo.latestVersion,
           }),
         });
@@ -1755,24 +1796,58 @@
 
             if (st.state === 'downloading') {
               const pct = Math.max(0, Math.min(100, st.progress || 0));
-              if (progressBar) progressBar.style.width = `${pct}%`;
-              if (progressText) {
-                progressText.textContent = st.totalMb > 0
-                  ? `Downloading update... ${pct}% (${st.downloadedMb} / ${st.totalMb} MB)`
-                  : `Downloading update... (${st.downloadedMb || 0} MB)`;
+              if (st.phase === 'connecting' && !(st.downloadedMb > 0)) {
+                setUpdatePhaseUi('connecting');
+                if (progressBar) {
+                  progressBar.style.width = '100%';
+                  progressBar.style.opacity = '0.65';
+                  progressBar.textContent = 'Connecting...';
+                }
+                if (progressPct) progressPct.textContent = '0%';
+                if (progressText) progressText.textContent = 'Connecting to download server...';
+              } else {
+                setUpdatePhaseUi('downloading');
+                if (progressBar) {
+                  progressBar.style.opacity = '1';
+                  progressBar.style.width = `${Math.max(pct, 2)}%`;
+                  progressBar.textContent = pct >= 12 ? `${pct}%` : '';
+                  progressBar.setAttribute('aria-valuenow', String(pct));
+                }
+                if (progressPct) progressPct.textContent = `${pct}%`;
+                if (progressText) {
+                  const speedLabel = st.speedMb > 0 ? ` — ${st.speedMb} MB/s` : '';
+                  progressText.textContent = st.totalMb > 0
+                    ? `Downloading update... ${st.downloadedMb} / ${st.totalMb} MB${speedLabel}`
+                    : `Downloading update... ${st.downloadedMb || 0} MB${speedLabel}`;
+                }
               }
             } else if (st.state === 'launching') {
               clearInterval(updateStatusTimer);
               updateStatusTimer = null;
-              if (progressBar) progressBar.style.width = '100%';
+              setUpdatePhaseUi('installing');
+              if (progressBar) {
+                progressBar.style.opacity = '1';
+                progressBar.style.width = '100%';
+                progressBar.style.backgroundColor = '#198754';
+                progressBar.textContent = '100%';
+                progressBar.setAttribute('aria-valuenow', '100');
+              }
+              if (progressPct) {
+                progressPct.style.color = '#198754';
+                progressPct.textContent = '100%';
+              }
               if (actionsWrap) actionsWrap.style.display = 'none';
               if (progressText) {
-                progressText.textContent = '🚀 Installer launched! Closing app to complete update...';
+                progressText.style.color = '#198754';
+                progressText.textContent = '🚀 Installer launched! Closing app to install update...';
               }
             } else if (st.state === 'error') {
               clearInterval(updateStatusTimer);
               updateStatusTimer = null;
-              if (progressBar) progressBar.style.background = '#dc3545';
+              if (progressBar) {
+                progressBar.style.opacity = '1';
+                progressBar.style.backgroundColor = '#dc3545';
+              }
               if (progressText) {
                 progressText.style.color = '#dc3545';
                 progressText.textContent = `⚠ Update failed: ${st.error || 'Unknown error'}`;
@@ -1783,9 +1858,12 @@
           } catch (_) {
             // App may have exited cleanly as installer took over
           }
-        }, 400);
+        }, 250);
       } catch (err) {
-        if (progressBar) progressBar.style.background = '#dc3545';
+        if (progressBar) {
+          progressBar.style.opacity = '1';
+          progressBar.style.backgroundColor = '#dc3545';
+        }
         if (progressText) {
           progressText.style.color = '#dc3545';
           progressText.textContent = `⚠ Update failed: ${err.message}`;

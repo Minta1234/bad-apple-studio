@@ -16,12 +16,14 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Locale
 
 data class ReleaseInfo(
     val version: String,
     val tagName: String,
     val apkUrl: String,
-    val releaseNotes: String
+    val releaseNotes: String,
+    val apkSize: Long = 0L
 )
 
 object AppUpdater {
@@ -90,23 +92,31 @@ object AppUpdater {
 
             val assets = json.optJSONArray("assets")
             var fallbackApkUrl: String? = null
+            var fallbackApkSize = 0L
             var preferredApkUrl: String? = null
+            var preferredApkSize = 0L
             if (assets != null) {
                 for (i in 0 until assets.length()) {
                     val asset = assets.optJSONObject(i) ?: continue
                     val name = asset.optString("name", "")
                     val url = asset.optString("browser_download_url", "")
+                    val size = asset.optLong("size", 0L)
                     if (name.endsWith(".apk", ignoreCase = true) && url.isNotBlank()) {
                         if (name.equals("BadAppleStudio.apk", ignoreCase = true)) {
                             preferredApkUrl = url
+                            preferredApkSize = size
                             break
                         }
-                        if (fallbackApkUrl == null) fallbackApkUrl = url
+                        if (fallbackApkUrl == null) {
+                            fallbackApkUrl = url
+                            fallbackApkSize = size
+                        }
                     }
                 }
             }
 
             val apkUrl = preferredApkUrl ?: fallbackApkUrl
+            val apkSize = if (preferredApkUrl != null) preferredApkSize else fallbackApkSize
             if (apkUrl.isNullOrBlank() || latestVersion.isBlank()) {
                 return@withContext Result.success(null)
             }
@@ -118,7 +128,8 @@ object AppUpdater {
                         version = latestVersion,
                         tagName = tagName,
                         apkUrl = apkUrl,
-                        releaseNotes = releaseNotes
+                        releaseNotes = releaseNotes,
+                        apkSize = apkSize
                     )
                 )
             } else {
@@ -134,6 +145,7 @@ object AppUpdater {
     suspend fun downloadApk(
         context: Context,
         apkUrl: String,
+        expectedSize: Long = 0L,
         onProgress: (Float, String) -> Unit
     ): Result<File> = withContext(Dispatchers.IO) {
         val mainHandler = Handler(Looper.getMainLooper())
@@ -143,6 +155,7 @@ object AppUpdater {
         var conn: HttpURLConnection? = null
 
         try {
+            mainHandler.post { onProgress(0f, "Connecting to server...") }
             var currentUrl = apkUrl
             var redirects = 0
             while (true) {
@@ -151,6 +164,7 @@ object AppUpdater {
                     instanceFollowRedirects = false
                     requestMethod = "GET"
                     setRequestProperty("User-Agent", "BadAppleStudio-Android")
+                    setRequestProperty("Accept-Encoding", "identity")
                     connectTimeout = 15_000
                     readTimeout = 30_000
                 }
@@ -171,9 +185,16 @@ object AppUpdater {
             }
 
             val connection = conn
-            val totalBytes = connection.contentLengthLong
+            val headerLen = connection.getHeaderField("Content-Length")?.toLongOrNull() ?: -1L
+            val totalBytes = when {
+                connection.contentLengthLong > 0L -> connection.contentLengthLong
+                headerLen > 0L -> headerLen
+                expectedSize > 0L -> expectedSize
+                else -> -1L
+            }
             var downloadedBytes = 0L
             var lastNotifyMs = 0L
+            val downloadStartMs = System.currentTimeMillis()
 
             connection.inputStream.use { input ->
                 FileOutputStream(tempFile).use { output ->
@@ -185,19 +206,21 @@ object AppUpdater {
                         downloadedBytes += read
 
                         val now = System.currentTimeMillis()
-                        if (now - lastNotifyMs >= 100L) {
+                        if (lastNotifyMs == 0L || now - lastNotifyMs >= 100L) {
                             lastNotifyMs = now
-                            val progress = if (totalBytes > 0) {
+                            val progress = if (totalBytes > 0L) {
                                 (downloadedBytes.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
                             } else {
                                 0f
                             }
                             val dlMb = downloadedBytes / (1024.0 * 1024.0)
-                            val label = if (totalBytes > 0) {
+                            val elapsedSec = ((now - downloadStartMs) / 1000.0).coerceAtLeast(0.1)
+                            val speedMbps = dlMb / elapsedSec
+                            val label = if (totalBytes > 0L) {
                                 val totMb = totalBytes / (1024.0 * 1024.0)
-                                String.format("%.1f / %.1f MB", dlMb, totMb)
+                                String.format(Locale.US, "%.1f / %.1f MB (%.1f MB/s)", dlMb, totMb, speedMbps)
                             } else {
-                                String.format("%.1f MB", dlMb)
+                                String.format(Locale.US, "%.1f MB (%.1f MB/s)", dlMb, speedMbps)
                             }
                             mainHandler.post { onProgress(progress, label) }
                         }

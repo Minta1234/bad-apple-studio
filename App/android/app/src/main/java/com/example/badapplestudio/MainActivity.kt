@@ -309,7 +309,11 @@ class MainActivity : ComponentActivity() {
         updateProgress = 0f
         updateStatusText = "Starting download..."
         lifecycleScope.launch {
-            val result = AppUpdater.downloadApk(this@MainActivity, release.apkUrl) { progress, status ->
+            val result = AppUpdater.downloadApk(
+                context = this@MainActivity,
+                apkUrl = release.apkUrl,
+                expectedSize = release.apkSize
+            ) { progress, status ->
                 updateProgress = progress
                 updateStatusText = status
             }
@@ -1044,16 +1048,37 @@ fun UpdateCard(
             }
 
             if (isDownloading) {
-                LinearProgressIndicator(
-                    progress = { progress },
-                    modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
-                    color = Color(0xFF0288D1)
-                )
-                Text(
-                    text = if (statusText.isNotBlank()) "$statusText (${(progress * 100).toInt()}%)" else "${(progress * 100).toInt()}%",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFF0277BD)
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (statusText.isNotBlank()) statusText else "Downloading...",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFF0277BD)
+                    )
+                    Text(
+                        text = "${(progress * 100).toInt()}%",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF0277BD)
+                    )
+                }
+                if (progress <= 0f) {
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth().height(10.dp).clip(RoundedCornerShape(5.dp)),
+                        color = Color(0xFF0288D1),
+                        trackColor = Color(0xFFB3E5FC)
+                    )
+                } else {
+                    LinearProgressIndicator(
+                        progress = { progress.coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth().height(10.dp).clip(RoundedCornerShape(5.dp)),
+                        color = Color(0xFF0288D1),
+                        trackColor = Color(0xFFB3E5FC)
+                    )
+                }
             } else {
                 Button(
                     onClick = onUpdate,

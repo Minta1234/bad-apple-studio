@@ -296,12 +296,27 @@ const GITHUB_LATEST_RELEASE_API =
 
 const updateState = {
   state: 'idle', // 'idle' | 'downloading' | 'launching' | 'error'
+  phase: 'idle', // 'idle' | 'connecting' | 'downloading' | 'installing' | 'error'
   progress: 0,
   downloadedMb: 0,
   totalMb: 0,
+  speedMb: 0,
   version: '',
   error: null,
 };
+
+function setElectronTaskbarProgress(fraction) {
+  try {
+    if (!process.versions || !process.versions.electron) return;
+    const { BrowserWindow } = require('electron');
+    if (!BrowserWindow || typeof BrowserWindow.getAllWindows !== 'function') return;
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win && !win.isDestroyed() && typeof win.setProgressBar === 'function') {
+        win.setProgressBar(fraction);
+      }
+    }
+  } catch (_) {}
+}
 
 function getCurrentAppVersion() {
   try {
@@ -398,12 +413,15 @@ function fetchJsonWithRedirect(targetUrl, redirectsLeft = 5) {
   });
 }
 
-function downloadFileWithProgress(targetUrl, destPath, onProgress, redirectsLeft = 5) {
+function downloadFileWithProgress(targetUrl, destPath, expectedBytes = 0, onProgress, redirectsLeft = 5) {
   return new Promise((resolve, reject) => {
     const req = https.get(
       targetUrl,
       {
-        headers: { 'User-Agent': 'BadAppleStudio-PC' },
+        headers: {
+          'User-Agent': 'BadAppleStudio-PC',
+          'Accept-Encoding': 'identity',
+        },
         timeout: 30000,
       },
       (res) => {
@@ -415,7 +433,7 @@ function downloadFileWithProgress(targetUrl, destPath, onProgress, redirectsLeft
             return;
           }
           const nextUrl = new URL(res.headers.location, targetUrl).toString();
-          resolve(downloadFileWithProgress(nextUrl, destPath, onProgress, redirectsLeft - 1));
+          resolve(downloadFileWithProgress(nextUrl, destPath, expectedBytes, onProgress, redirectsLeft - 1));
           return;
         }
         if (code < 200 || code >= 300) {
@@ -424,15 +442,22 @@ function downloadFileWithProgress(targetUrl, destPath, onProgress, redirectsLeft
           return;
         }
 
-        const totalBytes = parseInt(res.headers['content-length'] || '0', 10) || 0;
+        const totalBytes = parseInt(res.headers['content-length'] || '0', 10) || expectedBytes || 0;
         let downloadedBytes = 0;
+        const startMs = Date.now();
         const partPath = `${destPath}.part`;
         const fileStream = fs.createWriteStream(partPath);
+
+        if (typeof onProgress === 'function') {
+          onProgress(0, totalBytes, 0);
+        }
 
         res.on('data', (chunk) => {
           downloadedBytes += chunk.length;
           if (typeof onProgress === 'function') {
-            onProgress(downloadedBytes, totalBytes);
+            const elapsedSec = Math.max(0.1, (Date.now() - startMs) / 1000);
+            const speedMb = Number(((downloadedBytes / (1024 * 1024)) / elapsedSec).toFixed(1));
+            onProgress(downloadedBytes, totalBytes, speedMb);
           }
         });
 
@@ -534,6 +559,7 @@ app.post('/api/update/install', express.json(), async (req, res) => {
   try {
     let installerUrl = req.body && req.body.installerUrl ? String(req.body.installerUrl) : '';
     let installerName = req.body && req.body.installerName ? String(req.body.installerName) : '';
+    let installerSize = req.body && Number(req.body.installerSize) ? Number(req.body.installerSize) : 0;
     let version = req.body && req.body.version ? String(req.body.version) : '';
 
     if (!installerUrl) {
@@ -543,6 +569,7 @@ app.post('/api/update/install', express.json(), async (req, res) => {
       }
       installerUrl = latest.installerUrl;
       installerName = latest.installerName || '';
+      installerSize = latest.installerSize || installerSize;
       version = latest.latestVersion || version;
     }
 
@@ -557,30 +584,58 @@ app.post('/api/update/install', express.json(), async (req, res) => {
     const destPath = path.join(os.tmpdir(), safeFileName);
 
     updateState.state = 'downloading';
+    updateState.phase = 'connecting';
     updateState.progress = 0;
     updateState.downloadedMb = 0;
-    updateState.totalMb = 0;
+    updateState.totalMb = installerSize > 0 ? Number((installerSize / (1024 * 1024)).toFixed(1)) : 0;
+    updateState.speedMb = 0;
     updateState.version = version;
     updateState.error = null;
+    setElectronTaskbarProgress(0.02);
 
     res.json({ started: true, ...updateState });
 
-    downloadFileWithProgress(installerUrl, destPath, (downloaded, total) => {
+    downloadFileWithProgress(installerUrl, destPath, installerSize, (downloaded, total, speedMb) => {
+      updateState.phase = 'downloading';
       updateState.downloadedMb = Number((downloaded / (1024 * 1024)).toFixed(1));
-      updateState.totalMb = total > 0 ? Number((total / (1024 * 1024)).toFixed(1)) : 0;
-      updateState.progress = total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : 0;
+      updateState.totalMb = total > 0 ? Number((total / (1024 * 1024)).toFixed(1)) : updateState.totalMb;
+      updateState.speedMb = speedMb || 0;
+      const effectiveTotalMb = updateState.totalMb;
+      updateState.progress =
+        total > 0
+          ? Math.min(100, Math.round((downloaded / total) * 100))
+          : effectiveTotalMb > 0
+            ? Math.min(100, Math.round((updateState.downloadedMb / effectiveTotalMb) * 100))
+            : 0;
+      setElectronTaskbarProgress(updateState.progress > 0 ? updateState.progress / 100 : 0.02);
     })
-      .then((downloadedExe) => {
+      .then(async (downloadedExe) => {
         updateState.state = 'launching';
+        updateState.phase = 'installing';
         updateState.progress = 100;
-        const child = spawn(downloadedExe, [], {
-          detached: true,
-          stdio: 'ignore',
-          windowsHide: false,
-        });
-        child.unref();
+        setElectronTaskbarProgress(-1);
 
-        // Give the HTTP status poller time to see 'launching', then quit cleanly
+        let launched = false;
+        try {
+          if (process.versions && process.versions.electron) {
+            const { shell } = require('electron');
+            if (shell && typeof shell.openPath === 'function') {
+              const openErr = await shell.openPath(downloadedExe);
+              launched = !openErr;
+            }
+          }
+        } catch (_) {}
+
+        if (!launched) {
+          const child = spawn('cmd.exe', ['/c', 'start', '""', downloadedExe], {
+            detached: true,
+            stdio: 'ignore',
+            windowsHide: true,
+          });
+          child.unref();
+        }
+
+        // Give the HTTP status poller time to render the Installing phase, then quit cleanly
         // so the NSIS installer can overwrite Bad Apple Studio.exe without locks.
         setTimeout(() => {
           try {
@@ -592,15 +647,19 @@ app.post('/api/update/install', express.json(), async (req, res) => {
             }
           } catch (_) {}
           setTimeout(() => process.exit(0), 500).unref();
-        }, 1200).unref();
+        }, 1800).unref();
       })
       .catch((err) => {
         updateState.state = 'error';
+        updateState.phase = 'error';
         updateState.error = err.message || 'Download failed';
+        setElectronTaskbarProgress(-1);
       });
   } catch (err) {
     updateState.state = 'error';
+    updateState.phase = 'error';
     updateState.error = err.message || 'Failed to start update';
+    setElectronTaskbarProgress(-1);
     res.status(500).json({ error: updateState.error });
   }
 });
