@@ -15,6 +15,15 @@ android {
         versionName = "4.7.0"
     }
 
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("badapple-signing.keystore")
+            storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: "android"
+            keyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: "androiddebugkey"
+            keyPassword = System.getenv("ANDROID_KEY_PASSWORD") ?: "android"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false

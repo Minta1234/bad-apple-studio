@@ -41,6 +41,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
@@ -77,11 +78,19 @@ class MainActivity : ComponentActivity() {
     private var uploadSpeed by mutableStateOf("")
     private var connectedDevice by mutableStateOf<BluetoothDevice?>(null)
 
+    private var availableUpdate by mutableStateOf<ReleaseInfo?>(null)
+    private var isCheckingUpdate by mutableStateOf(false)
+    private var isDownloadingUpdate by mutableStateOf(false)
+    private var updateProgress by mutableStateOf(0f)
+    private var updateStatusText by mutableStateOf("")
+    private var pendingInstallApk by mutableStateOf<File?>(null)
+
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         bleManager = BleUploadManager(this)
         isBluetoothOn = bleManager.isBluetoothEnabled
+        checkAppUpdate(silent = true)
 
         if (hasBlePermissions() && !isBluetoothOn) {
             try {
@@ -111,8 +120,46 @@ class MainActivity : ComponentActivity() {
                             fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace,
                             color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                            modifier = Modifier.padding(top = 8.dp)
                         )
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.padding(bottom = 4.dp)
+                        ) {
+                            Text(
+                                text = "v${AppUpdater.getCurrentVersion(this@MainActivity)}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Color.Gray,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            TextButton(
+                                onClick = { checkAppUpdate(silent = false) },
+                                enabled = !isCheckingUpdate && !isDownloadingUpdate,
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = if (isCheckingUpdate) "Checking..." else "🔄 Check Update",
+                                    style = MaterialTheme.typography.labelMedium
+                                )
+                            }
+                        }
+
+                        AnimatedVisibility(visible = availableUpdate != null) {
+                            availableUpdate?.let { release ->
+                                UpdateCard(
+                                    release = release,
+                                    isDownloading = isDownloadingUpdate,
+                                    progress = updateProgress,
+                                    statusText = updateStatusText,
+                                    onUpdate = { startAppUpdate(release) },
+                                    onDismiss = {
+                                        if (!isDownloadingUpdate) availableUpdate = null
+                                    }
+                                )
+                            }
+                        }
 
                         // 1. Board Selector
                         BoardSelectorCard(
@@ -222,6 +269,69 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         isBluetoothOn = bleManager.isBluetoothEnabled
+        val apkToInstall = pendingInstallApk
+        if (apkToInstall != null && apkToInstall.exists() &&
+            (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls())
+        ) {
+            pendingInstallApk = null
+            AppUpdater.installApk(this, apkToInstall)
+        }
+    }
+
+    private fun checkAppUpdate(silent: Boolean = false) {
+        if (isCheckingUpdate) return
+        isCheckingUpdate = true
+        lifecycleScope.launch {
+            val result = AppUpdater.checkForUpdate(this@MainActivity)
+            isCheckingUpdate = false
+            result.onSuccess { release ->
+                availableUpdate = release
+                if (!silent) {
+                    val msg = if (release != null) {
+                        "Update available: v${release.version}"
+                    } else {
+                        "Already up to date (v${AppUpdater.getCurrentVersion(this@MainActivity)})"
+                    }
+                    Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
+                }
+            }.onFailure { err ->
+                if (!silent) {
+                    Toast.makeText(this@MainActivity, "Update check failed: ${err.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    private fun startAppUpdate(release: ReleaseInfo) {
+        if (isDownloadingUpdate) return
+        isDownloadingUpdate = true
+        updateProgress = 0f
+        updateStatusText = "Starting download..."
+        lifecycleScope.launch {
+            val result = AppUpdater.downloadApk(this@MainActivity, release.apkUrl) { progress, status ->
+                updateProgress = progress
+                updateStatusText = status
+            }
+            isDownloadingUpdate = false
+            result.onSuccess { apkFile ->
+                try {
+                    val launched = AppUpdater.installApk(this@MainActivity, apkFile)
+                    if (!launched) {
+                        pendingInstallApk = apkFile
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Allow 'Install unknown apps' to finish updating",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(this@MainActivity, "Installer error: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }.onFailure { err ->
+                updateStatusText = ""
+                Toast.makeText(this@MainActivity, "Download failed: ${err.message}", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     private val enableBluetoothLauncher = registerForActivityResult(
@@ -877,6 +987,80 @@ fun UploadCard(
                 color = Color(0xFF29B6F6)
             )
             Text("${(uploadProgress * 100).toInt()}%", style = MaterialTheme.typography.labelLarge)
+        }
+    }
+}
+
+@Composable
+fun UpdateCard(
+    release: ReleaseInfo,
+    isDownloading: Boolean,
+    progress: Float,
+    statusText: String,
+    onUpdate: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFE3F2FD)),
+        border = BorderStroke(1.dp, Color(0xFF29B6F6))
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "NEW UPDATE: v${release.version}",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF0277BD)
+                )
+                if (!isDownloading) {
+                    TextButton(
+                        onClick = onDismiss,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                    ) {
+                        Text("Later", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+
+            if (release.releaseNotes.isNotBlank()) {
+                Text(
+                    text = release.releaseNotes,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF37474F),
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            if (isDownloading) {
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
+                    color = Color(0xFF0288D1)
+                )
+                Text(
+                    text = if (statusText.isNotBlank()) "$statusText (${(progress * 100).toInt()}%)" else "${(progress * 100).toInt()}%",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFF0277BD)
+                )
+            } else {
+                Button(
+                    onClick = onUpdate,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0288D1)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("⬇ Update App", color = Color.White)
+                }
+            }
         }
     }
 }
